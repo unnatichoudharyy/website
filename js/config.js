@@ -32,7 +32,9 @@ window.STORE = {
   // Pre-order delivery slots
   preorderMinDays: 1,       // earliest delivery day: 1 = tomorrow, 2 = day after…
   preorderMaxDays: 7,       // how many days ahead customers can choose
-  openHour: 9,              // first slot starts at 9:00
+  orderCutoffHour: 18,      // orders placed at/after 6 PM skip one more day
+                            // (after 6 PM today → earliest is the day after tomorrow)
+  openHour: 10,             // first slot starts at 10:00
   closeHour: 21,            // last slot ends at 21:00
   slotHours: 1.5,           // slot length (e.g. 9:00 – 10:30 AM)
 

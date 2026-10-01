@@ -375,3 +375,4 @@ dialog.popup[open] { animation: pop .18s ease-out; }
 dialog.popup h2 { margin: 0 0 6px; font-size: 1.25rem; color: var(--primary); }
 dialog.popup p { margin: 0 0 8px; line-height: 1.5; }
 dialog.popup .muted-sm { color: var(--muted); font-size: .85rem; margin-bottom: 18px; }
+.field .hint { margin: -2px 0 8px; font-size: .78rem; color: var(--muted); line-height: 1.45; }

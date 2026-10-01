@@ -11,7 +11,7 @@ It uses plain HTML, CSS and JavaScript, with no build step and no server.
 3. **Your Order**: change quantities and see the bill (sub total, delivery charges, GST, to pay).
 4. **Delivery address**: search a place, move the map pin, or use current location. The map uses OpenStreetMap, so no API key is needed.
    An address outside Delhi NCR / Gurgaon shows a popup: *"Sorry, we are not currently delivering near your location."*
-5. **Checkout**: pick a delivery date (from tomorrow, up to 7 days ahead) and time slot. Enter name, email, mobile, house no., landmark and instructions. Choose UPI or cash on delivery.
+5. **Checkout**: pick a delivery date and time slot (from 10 AM). Orders placed before 6 PM can be delivered the next day; after 6 PM the earliest date is the day after tomorrow. Enter name, email, mobile, house no., landmark and instructions. Choose UPI or cash on delivery.
 6. **Order received**: shows the order ID and summary. A **Confirm order on WhatsApp** button sends the full order (items, address, Google Maps link) to your WhatsApp number. A **Pay with UPI** button opens GPay/PhonePe/Paytm with the amount filled in.
 
 ## Make it yours
@@ -22,7 +22,7 @@ It uses plain HTML, CSS and JavaScript, with no build step and no server.
 | Delivery fee, free-delivery limit, minimum order, GST | `js/config.js` |
 | Areas you deliver to (`deliveryAreas`) | `js/config.js` |
 | The Navratri banner | `js/config.js` |
-| Earliest and latest pre-order day, slot timings | `js/config.js` |
+| Earliest and latest pre-order day, 6 PM order cut-off, slot timings (from 10 AM) | `js/config.js` |
 | Categories, items, prices, weights, add-ons, stock, sold out | `js/menu.js` |
 | Colours (maroon theme) and fonts | top of `css/style.css` |
 

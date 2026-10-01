@@ -547,6 +547,9 @@
   // ---------------------------------------------------------------------------
   // Checkout page
   // ---------------------------------------------------------------------------
+  const pastCutoff = () => new Date().getHours() >= S.orderCutoffHour;
+  const hourLabel = (h) => `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`;
+
   function buildSlots() {
     const days = [];
     const now = new Date();
@@ -554,8 +557,10 @@
     const ap = (d) => (d.getHours() < 12 ? "AM" : "PM");
     // "9:00 – 10:30 AM", or "11:30 AM – 1:00 PM" when the slot crosses noon.
     const range = (a, b) => (ap(a) === ap(b) ? `${hm(a)} – ${hm(b)} ${ap(b)}` : `${hm(a)} ${ap(a)} – ${hm(b)} ${ap(b)}`);
-    // Pre-orders only: the first day offered is preorderMinDays from today.
-    for (let d = S.preorderMinDays; d <= S.preorderMaxDays; d++) {
+    // Pre-orders only: the first day offered is preorderMinDays from today,
+    // or one day later once today's order cut-off time has passed.
+    const minDays = S.preorderMinDays + (pastCutoff() ? 1 : 0);
+    for (let d = minDays; d <= minDays + S.preorderMaxDays - S.preorderMinDays; d++) {
       const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
       const slots = [];
       for (let h = S.openHour; h + S.slotHours <= S.closeHour + 1e-9; h += S.slotHours) {
@@ -584,6 +589,7 @@
       <form class="page" id="checkoutForm" novalidate>
         <div class="field">
           <span class="lbl">Delivery Date &amp; Slot <span class="req">*</span></span>
+          <p class="hint">Pre-orders placed before ${hourLabel(S.orderCutoffHour)} can be delivered ${S.preorderMinDays === 1 ? "the next day" : `in ${S.preorderMinDays} days`}.${pastCutoff() ? ` Today's ${hourLabel(S.orderCutoffHour)} cut-off has passed, so the earliest date is one day later.` : ""}</p>
           <div class="two">
             <select id="day" aria-label="Date">${days.map((d, i) => `<option value="${i}">${esc(d.label)}</option>`).join("")}</select>
             <select id="slot" aria-label="Time slot"></select>
@@ -669,6 +675,14 @@
       });
       if (firstBad) { firstBad.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
       if (!days.length) { toast("No slots available right now. Please call us to order."); return; }
+      // The 6 PM cut-off may have passed while the customer was filling the form.
+      const chosen = days[Number(daySel.value)].label;
+      if (!buildSlots().some((d) => d.label === chosen)) {
+        toast(`The ${hourLabel(S.orderCutoffHour)} cut-off has passed. Please pick a new delivery date.`);
+        state.customer = { ...state.customer, name: v("name"), email: v("email"), phone: v("phone"), house: v("house"), landmark: v("landmark") };
+        renderCheckout();
+        return;
+      }
 
       state.customer = { name: v("name"), email: v("email"), phone: v("phone"), house: v("house"), landmark: v("landmark") };
       store.set("customer", state.customer);
@@ -945,7 +959,7 @@
   $("#drawerBrand").innerHTML = `${esc(S.name)}<small>${esc(S.tagline)}</small>`;
   $("#drawerInfo").innerHTML = `
     <p>🛵 Pre-orders only · home delivery across Delhi NCR &amp; Gurgaon</p>
-    <p>🕘 Delivery slots ${S.openHour}:00 – ${S.closeHour}:00</p>
+    <p>🕘 Delivery slots from ${hourLabel(S.openHour)} · order by ${hourLabel(S.orderCutoffHour)} for next-day delivery</p>
     <p>📞 <a href="tel:${esc(S.phone.replace(/\s/g, ""))}">${esc(S.phone)}</a></p>
     <p>💬 <a href="https://wa.me/${esc(S.whatsappNumber)}" target="_blank" rel="noopener">Chat on WhatsApp</a></p>`;
 
