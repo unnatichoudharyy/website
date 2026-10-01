@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 window.STORE = {
   name: "Marwadi Khana",
-  tagline: "Asli Marwadi mithai, ghee mein bani",
+  tagline: "Asli Marwadi mithai, ghee mein bani · pre-orders only",
   city: "Delhi NCR",
   currency: "₹",
 
@@ -21,35 +21,39 @@ window.STORE = {
   freeDeliveryAbove: 1499,  // item total at which delivery is free (0 = never)
   taxRate: 0.05,            // 5% GST on items
 
-  // Coupons: code -> { type: "percent" | "flat", value, min, label }
-  coupons: {
-    NAVRATRI10: { type: "percent", value: 10, min: 999, label: "10% off on orders above ₹999" },
-    MITHAS100:  { type: "flat", value: 100, min: 1499, label: "₹100 off on orders above ₹1499" }
-  },
-
   // Promo banner at the top of the menu. Set to null to hide.
   banner: {
-    title: "Navratri Specials are here 🪔",
-    text: "Vrat-friendly mithai and namkeen made without grains, onion or garlic. Use code NAVRATRI10 for 10% off above ₹999.",
+    title: "Navratri pre-orders are open 🪔",
+    text: "Vrat-friendly mithai and namkeen made without grains, onion or garlic. Order now and pick your delivery date.",
     cta: "See Navratri menu",
     category: "navratri"
   },
 
-  // Delivery slots
+  // Pre-order delivery slots
+  preorderMinDays: 1,       // earliest delivery day: 1 = tomorrow, 2 = day after…
+  preorderMaxDays: 7,       // how many days ahead customers can choose
   openHour: 9,              // first slot starts at 9:00
   closeHour: 21,            // last slot ends at 21:00
-  slotHours: 1.5,           // slot length (e.g. 09:30 – 11:00)
-  prepMinutes: 120,         // earliest slot must start this long from now
-  preorderDays: 4,          // days ahead customers can schedule
+  slotHours: 1.5,           // slot length (e.g. 9:00 – 10:30 AM)
 
-  // Your kitchen / shop. Used for pickup details, the map's starting point
-  // and the delivery radius check.
+  // Where we deliver. An address is accepted when its state / district / city
+  // matches one of these names (as written on OpenStreetMap). Anything else
+  // shows the "Sorry, we are not currently delivering near your location" popup.
+  deliveryAreas: [
+    "Delhi", "New Delhi",
+    "Gurugram", "Gurgaon",
+    "Noida", "Greater Noida", "Gautam Buddha Nagar",
+    "Ghaziabad",
+    "Faridabad"
+  ],
+  // Rough Delhi NCR box, only used if the address lookup service is down.
+  serviceBox: { north: 28.95, south: 28.25, west: 76.80, east: 77.65 },
+
+  // Map starts here (your kitchen).
   shop: {
     lat: 28.6139,
-    lng: 77.2090,
-    address: "Shop no. 1, Your Market, New Delhi 110001"
+    lng: 77.2090
   },
-  deliveryRadiusKm: 25,     // set 0 to deliver anywhere
 
   // Optional: URL that receives every order as JSON (POST), e.g. a Google
   // Apps Script web app that appends rows to a Google Sheet. Leave "" to skip.

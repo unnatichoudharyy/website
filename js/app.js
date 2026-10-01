@@ -52,9 +52,7 @@
   // ---------------------------------------------------------------------------
   const state = {
     cart: store.get("cart", []),          // [{ key, id, qty, sel: [[choiceIdx...] per group] }]
-    mode: store.get("mode", "Delivery"),  // "Delivery" | "Pickup"
     address: store.get("address", null),  // { text, lat, lng }
-    coupon: store.get("coupon", ""),
     customer: store.get("customer", {}),
     collapsed: {},
     filters: { q: "", vrat: false, popular: false, under300: false },
@@ -116,18 +114,11 @@
 
   function totals() {
     const sub = state.cart.reduce((a, l) => a + unitPrice(ITEMS[l.id], l.sel) * l.qty, 0);
-    let discount = 0, couponError = "";
-    const c = state.coupon && S.coupons[state.coupon];
-    if (state.coupon && !c) couponError = "This coupon code is not valid.";
-    else if (c && sub < c.min) couponError = `Add items worth ${money(c.min - sub)} more to use ${state.coupon}.`;
-    else if (c) discount = c.type === "percent" ? Math.round(sub * c.value / 100) : c.value;
-    const afterDiscount = Math.max(0, sub - discount);
-    const delivery = state.mode === "Delivery" && sub > 0 && !(S.freeDeliveryAbove && sub >= S.freeDeliveryAbove)
-      ? S.deliveryFee : 0;
-    const tax = Math.round(afterDiscount * S.taxRate);
-    const total = afterDiscount + delivery + tax;
-    const belowMin = state.mode === "Delivery" && sub < S.minOrder;
-    return { sub, discount, couponError, delivery, tax, total, belowMin };
+    const delivery = sub > 0 && !(S.freeDeliveryAbove && sub >= S.freeDeliveryAbove) ? S.deliveryFee : 0;
+    const tax = Math.round(sub * S.taxRate);
+    const total = sub + delivery + tax;
+    const belowMin = sub < S.minOrder;
+    return { sub, delivery, tax, total, belowMin };
   }
 
   // ---------------------------------------------------------------------------
@@ -500,8 +491,7 @@
   function billHTML(t) {
     return `<div class="bill">
       <div class="row"><span>Item Sub Total</span><span>${money(t.sub)}</span></div>
-      ${t.discount ? `<div class="row off"><span>Coupon (${esc(state.coupon)})</span><span>− ${money(t.discount)}</span></div>` : ""}
-      ${state.mode === "Delivery" ? `<div class="row"><span>Delivery Charges</span><span>${t.delivery ? money(t.delivery) : "FREE"}</span></div>` : ""}
+      <div class="row"><span>Delivery Charges</span><span>${t.delivery ? money(t.delivery) : "FREE"}</span></div>
       <div class="row"><span>Taxes and Charges</span><span>${money(t.tax)}</span></div>
       <div class="row total"><span>To Pay</span><span>${money(t.total)}</span></div>
     </div>`;
@@ -516,17 +506,12 @@
       return;
     }
     const t = totals();
-    const freeGap = S.freeDeliveryAbove && state.mode === "Delivery" && t.sub < S.freeDeliveryAbove
-      ? S.freeDeliveryAbove - t.sub : 0;
-    const bestCoupon = Object.entries(S.coupons)[0];
+    const freeGap = S.freeDeliveryAbove && t.sub < S.freeDeliveryAbove ? S.freeDeliveryAbove - t.sub : 0;
 
     view.innerHTML = `
       <div class="page">
         <h1>Your Order</h1>
-        <p class="sub">from ${esc(S.name)}, ${esc(S.city)} ${esc(state.mode)}</p>
-        <div class="mode-switch" role="tablist">
-          ${["Delivery", "Pickup"].map((m) => `<button role="tab" data-mode="${m}" class="${state.mode === m ? "on" : ""}">${m}</button>`).join("")}
-        </div>
+        <p class="sub">Pre-order from ${esc(S.name)} · home delivery in ${esc(S.city)}</p>
         ${state.cart.map((l) => {
           const item = ITEMS[l.id];
           return `<div class="line">
@@ -536,14 +521,6 @@
           </div>`;
         }).join("")}
         <p><a href="#/" class="link-btn">+ ADD MORE ITEMS</a></p>
-        ${bestCoupon && !state.coupon ? `<div class="promo"><span>🎉 ${esc(bestCoupon[1].label)}</span><button class="btn ghost" style="color:#fff;border-color:#fff;padding:6px 12px;font-size:.75rem" data-apply="${esc(bestCoupon[0])}">Apply ${esc(bestCoupon[0])}</button></div>` : ""}
-        <div class="coupon">
-          <span aria-hidden="true">🏷️</span>
-          ${state.coupon && !t.couponError
-            ? `<span class="applied">${esc(state.coupon)} applied · you save ${money(t.discount)}</span><button class="link-btn" data-remove-coupon>REMOVE</button>`
-            : `<input id="couponInput" placeholder="APPLY COUPON" value="${esc(state.coupon)}" aria-label="Coupon code"><button class="link-btn" id="couponBtn">APPLY</button>`}
-        </div>
-        ${t.couponError ? `<p class="coupon-msg err">${esc(t.couponError)}</p>` : ""}
         ${billHTML(t)}
         ${freeGap ? `<p class="note">Add ${money(freeGap)} more for FREE delivery.</p>` : ""}
         ${t.belowMin ? `<p class="note">Minimum order for delivery is ${money(S.minOrder)}.</p>` : ""}
@@ -554,35 +531,17 @@
       </div></div>`;
 
     view.onclick = (e) => {
-      const b = e.target.closest("[data-key],[data-mode],[data-apply],[data-remove-coupon],#couponBtn,#proceed");
+      const b = e.target.closest("[data-key],#proceed");
       if (!b) return;
       if (b.dataset.key) {
         const line = state.cart.find((l) => l.key === b.dataset.key);
         setQty(b.dataset.key, line.qty + Number(b.dataset.d));
         renderCart();
-      } else if (b.dataset.mode) {
-        state.mode = b.dataset.mode; store.set("mode", state.mode); renderCart();
-      } else if (b.dataset.apply) {
-        applyCoupon(b.dataset.apply);
-      } else if ("removeCoupon" in b.dataset) {
-        state.coupon = ""; store.set("coupon", ""); renderCart();
-      } else if (b.id === "couponBtn") {
-        applyCoupon($("#couponInput").value);
       } else if (b.id === "proceed") {
-        if (state.mode === "Delivery" && !state.address) openAddress(() => go("#/checkout"));
+        if (!state.address || !state.address.ok) openAddress(() => go("#/checkout"));
         else go("#/checkout");
       }
     };
-    const ci = $("#couponInput");
-    if (ci) ci.onkeydown = (e) => { if (e.key === "Enter") applyCoupon(ci.value); };
-  }
-
-  function applyCoupon(code) {
-    state.coupon = code.trim().toUpperCase();
-    store.set("coupon", state.coupon);
-    const t = totals();
-    if (state.coupon && !t.couponError) toast(`Coupon applied! You save ${money(t.discount)}`);
-    renderCart();
   }
 
   // ---------------------------------------------------------------------------
@@ -591,22 +550,22 @@
   function buildSlots() {
     const days = [];
     const now = new Date();
-    const earliest = new Date(now.getTime() + S.prepMinutes * 60000);
     const hm = (d) => `${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")}`;
     const ap = (d) => (d.getHours() < 12 ? "AM" : "PM");
     // "9:00 – 10:30 AM", or "11:30 AM – 1:00 PM" when the slot crosses noon.
     const range = (a, b) => (ap(a) === ap(b) ? `${hm(a)} – ${hm(b)} ${ap(b)}` : `${hm(a)} ${ap(a)} – ${hm(b)} ${ap(b)}`);
-    for (let d = 0; d <= S.preorderDays; d++) {
+    // Pre-orders only: the first day offered is preorderMinDays from today.
+    for (let d = S.preorderMinDays; d <= S.preorderMaxDays; d++) {
       const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
       const slots = [];
       for (let h = S.openHour; h + S.slotHours <= S.closeHour + 1e-9; h += S.slotHours) {
         const start = new Date(day); start.setHours(Math.floor(h), Math.round((h % 1) * 60), 0, 0);
         const end = new Date(start.getTime() + S.slotHours * 3600000);
-        if (start >= earliest) slots.push(range(start, end));
+        slots.push(range(start, end));
       }
       if (slots.length) {
-        const label = d === 0 ? "Today" : d === 1 ? "Tomorrow" : day.toLocaleDateString("en-IN", { weekday: "short" });
-        days.push({ label: `${label}, ${day.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`, slots });
+        const date = day.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+        days.push({ label: date, slots });
       }
     }
     return days;
@@ -620,12 +579,11 @@
     window.scrollTo(0, 0);
     const c = state.customer;
     const days = buildSlots();
-    const delivery = state.mode === "Delivery";
 
     view.innerHTML = `
       <form class="page" id="checkoutForm" novalidate>
         <div class="field">
-          <span class="lbl">${delivery ? "Delivery" : "Pickup"} Slot <span class="req">*</span></span>
+          <span class="lbl">Delivery Date &amp; Slot <span class="req">*</span></span>
           <div class="two">
             <select id="day" aria-label="Date">${days.map((d, i) => `<option value="${i}">${esc(d.label)}</option>`).join("")}</select>
             <select id="slot" aria-label="Time slot"></select>
@@ -646,10 +604,9 @@
           <div class="phone"><span>+91</span><input id="phone" type="tel" inputmode="numeric" maxlength="10" autocomplete="tel-national" value="${esc(c.phone)}" required></div>
           <div class="err">Please enter a 10-digit mobile number</div>
         </div>
-        ${delivery ? `
           <div class="field" data-f="address">
             <div class="lbl-row"><span class="lbl">Delivering to <span class="req">*</span> <small>(as on map)</small></span><button type="button" class="link-btn" id="changeAddr">CHANGE</button></div>
-            <div class="addr-box${state.address ? "" : " empty"}" id="addrBox">${state.address ? esc(state.address.text) : "Tap to pick your delivery location"}</div>
+            <div class="addr-box${state.address && state.address.ok ? "" : " empty"}" id="addrBox">${state.address && state.address.ok ? esc(state.address.text) : "Tap to pick your delivery location"}</div>
             <div class="err">Please pick your delivery location</div>
           </div>
           <div class="field" data-f="house">
@@ -660,11 +617,7 @@
           <div class="field">
             <label for="landmark">Nearest Landmark <small>(optional)</small></label>
             <input id="landmark" value="${esc(c.landmark)}">
-          </div>` : `
-          <div class="field">
-            <span class="lbl">Pick up from</span>
-            <div class="addr-box">${esc(S.name)}<br>${esc(S.shop.address)}</div>
-          </div>`}
+          </div>
         <div class="field">
           <button type="button" class="toggle-more" id="moreBtn">Add more instructions +</button>
           <textarea id="notes" rows="3" placeholder="Message on box, sugar preference, gate code…" hidden></textarea>
@@ -673,14 +626,14 @@
           <span class="lbl">Payment <span class="req">*</span></span>
           <div class="pay-opts">
             ${S.upiId ? `<label><input type="radio" name="pay" value="UPI" checked> Pay now with UPI (GPay / PhonePe / Paytm)</label>` : ""}
-            <label><input type="radio" name="pay" value="COD" ${S.upiId ? "" : "checked"}> Cash / UPI on ${delivery ? "delivery" : "pickup"}</label>
+            <label><input type="radio" name="pay" value="COD" ${S.upiId ? "" : "checked"}> Cash / UPI on delivery</label>
           </div>
         </div>
         ${billHTML(t)}
       </form>
       <div class="sticky-foot pay-foot"><div class="inner">
         <div class="topay"><span>To Pay</span><span>${money(t.total)}</span></div>
-        <button class="btn primary block" id="payNow" type="submit" form="checkoutForm">${S.upiId ? "Pay Now" : "Place Order"}</button>
+        <button class="btn primary block" id="payNow" type="submit" form="checkoutForm">${S.upiId ? "Pay Now" : "Place Pre-order"}</button>
       </div></div>`;
 
     const daySel = $("#day"), slotSel = $("#slot");
@@ -693,11 +646,9 @@
 
     $("#phone").oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, "").slice(0, 10); };
     $("#moreBtn").onclick = (e) => { e.target.hidden = true; const n = $("#notes"); n.hidden = false; n.focus(); };
-    if (delivery) {
-      const pick = () => openAddress(() => renderCheckout());
-      $("#changeAddr").onclick = pick;
-      $("#addrBox").onclick = () => { if (!state.address) pick(); };
-    }
+    const pick = () => openAddress(() => renderCheckout());
+    $("#changeAddr").onclick = pick;
+    $("#addrBox").onclick = () => { if (!state.address || !state.address.ok) pick(); };
 
     $("#checkoutForm").onsubmit = (e) => {
       e.preventDefault();
@@ -706,8 +657,8 @@
         name: v("name").length >= 2,
         email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v("email")),
         phone: /^[6-9]\d{9}$/.test(v("phone")),
-        address: !delivery || !!state.address,
-        house: !delivery || v("house").length > 0
+        address: !!(state.address && state.address.ok),
+        house: v("house").length > 0
       };
       let firstBad = null;
       Object.entries(checks).forEach(([k, ok]) => {
@@ -737,20 +688,16 @@
     const order = {
       id,
       placedAt: now.toISOString(),
-      mode: state.mode,
       slot,
       payment,
       customer: { name: c.name, email: c.email, phone: "+91" + c.phone },
-      address: state.mode === "Delivery"
-        ? { line: c.house, landmark: c.landmark, map: state.address.text, lat: state.address.lat, lng: state.address.lng }
-        : null,
+      address: { line: c.house, landmark: c.landmark, map: state.address.text, lat: state.address.lat, lng: state.address.lng },
       items: state.cart.map((l) => {
         const item = ITEMS[l.id];
         return { name: item.name, options: selLabel(item, l.sel), qty: l.qty, price: unitPrice(item, l.sel) * l.qty };
       }),
-      coupon: t.discount ? state.coupon : "",
       notes,
-      totals: { sub: t.sub, discount: t.discount, delivery: t.delivery, tax: t.tax, total: t.total }
+      totals: { sub: t.sub, delivery: t.delivery, tax: t.tax, total: t.total }
     };
 
     const orders = store.get("orders", {});
@@ -764,34 +711,29 @@
     }
 
     state.cart = [];
-    state.coupon = "";
-    store.set("coupon", "");
     saveCart();
     go("#/order/" + id);
   }
 
   function whatsappText(o) {
     const lines = [
-      `*New order ${o.id}* — ${S.name}`,
-      `${o.mode} · ${o.slot}`,
+      `*New pre-order ${o.id}* — ${S.name}`,
+      `Delivery on ${o.slot}`,
       "",
       ...o.items.map((i) => `• ${i.qty} × ${i.name}${i.options ? ` (${i.options})` : ""} — ${money(i.price)}`),
       "",
       `Sub total: ${money(o.totals.sub)}`,
-      o.totals.discount ? `Coupon ${o.coupon}: −${money(o.totals.discount)}` : "",
-      o.mode === "Delivery" ? `Delivery: ${o.totals.delivery ? money(o.totals.delivery) : "FREE"}` : "",
+      `Delivery: ${o.totals.delivery ? money(o.totals.delivery) : "FREE"}`,
       `Taxes: ${money(o.totals.tax)}`,
-      `*To pay: ${money(o.totals.total)}* (${o.payment === "UPI" ? "UPI" : "Cash/UPI on " + o.mode.toLowerCase()})`,
+      `*To pay: ${money(o.totals.total)}* (${o.payment === "UPI" ? "UPI" : "Cash/UPI on delivery"})`,
       "",
       `Name: ${o.customer.name}`,
       `Phone: ${o.customer.phone}`,
       `Email: ${o.customer.email}`
     ];
-    if (o.address) {
-      lines.push(`Address: ${o.address.line}, ${o.address.map}`);
-      if (o.address.landmark) lines.push(`Landmark: ${o.address.landmark}`);
-      if (o.address.lat) lines.push(`Map: https://maps.google.com/?q=${o.address.lat},${o.address.lng}`);
-    }
+    lines.push(`Address: ${o.address.line}, ${o.address.map}`);
+    if (o.address.landmark) lines.push(`Landmark: ${o.address.landmark}`);
+    if (o.address.lat != null) lines.push(`Map: https://maps.google.com/?q=${o.address.lat},${o.address.lng}`);
     if (o.notes) lines.push(`Notes: ${o.notes}`);
     return lines.filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n");
   }
@@ -807,8 +749,8 @@
     view.innerHTML = `
       <div class="page done">
         <div class="tick" aria-hidden="true">✓</div>
-        <h1>Order received!</h1>
-        <p class="sub">Order ID <strong>${esc(o.id)}</strong><br>${esc(o.mode)} · ${esc(o.slot)}</p>
+        <h1>Pre-order received!</h1>
+        <p class="sub">Order ID <strong>${esc(o.id)}</strong><br>Delivery on ${esc(o.slot)}</p>
         <div class="actions">
           <a class="btn green block" href="${wa}" target="_blank" rel="noopener">Confirm order on WhatsApp</a>
           ${o.payment === "UPI" && S.upiId ? `<a class="btn primary block" href="${upi}">Pay ${money(o.totals.total)} with UPI</a>` : ""}
@@ -818,7 +760,7 @@
           <h3>Order summary</h3>
           ${o.items.map((i) => `<div class="bill"><div class="row"><span>${i.qty} × ${esc(i.name)}${i.options ? `<br><small style="color:var(--muted)">${esc(i.options)}</small>` : ""}</span><span>${money(i.price)}</span></div></div>`).join("")}
           <div class="bill"><div class="row total"><span>Total</span><span>${money(o.totals.total)}</span></div></div>
-          ${o.address ? `<p class="sub" style="margin-top:12px">📍 ${esc(o.address.line)}, ${esc(o.address.map)}</p>` : `<p class="sub" style="margin-top:12px">📍 Pickup from ${esc(S.shop.address)}</p>`}
+          <p class="sub" style="margin-top:12px">📍 ${esc(o.address.line)}, ${esc(o.address.map)}</p>
         </div>
         <a class="btn ghost block" href="#/">Back to menu</a>
       </div>`;
@@ -834,20 +776,39 @@
   const contBtn = $("#addrContinue");
   let map = null, pending = null, onAddrDone = null, searchTimer, revTimer, searchAbort;
 
-  const distanceKm = (a, b) => {
-    const R = 6371, rad = Math.PI / 180;
-    const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
-    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
-    return 2 * R * Math.asin(Math.sqrt(h));
+  // Is this place inside our delivery area? Uses the administrative parts of an
+  // OpenStreetMap address (state / district / city), not street names, so a
+  // "Delhi Road" in another city doesn't count.
+  const AREAS = S.deliveryAreas.map((a) => a.toLowerCase());
+  function inServiceArea(addr, text) {
+    if (addr) {
+      const parts = ["state", "state_district", "county", "city", "town", "city_district", "municipality"]
+        .map((k) => (addr[k] || "").toLowerCase()).filter(Boolean);
+      return parts.some((p) => AREAS.some((a) => p === a || p.includes(a)));
+    }
+    // No structured address (typed by hand): look for an area name in the text.
+    const t = (text || "").toLowerCase();
+    return AREAS.some((a) => new RegExp(`\\b${a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(t));
+  }
+  // Rough Delhi NCR box, used only when the address lookup itself fails.
+  const inServiceBox = (lat, lng) => {
+    const b = S.serviceBox;
+    return lat >= b.south && lat <= b.north && lng >= b.west && lng <= b.east;
   };
+
+  const areaDialog = $("#areaDialog");
+  function notDelivering() {
+    if (!areaDialog.open) areaDialog.showModal();
+  }
+  areaDialog.addEventListener("click", (e) => { if (e.target.closest("[data-close]")) areaDialog.close(); });
 
   function setPending(p) {
     pending = p;
-    const far = p && p.lat != null && S.deliveryRadiusKm && distanceKm(S.shop, p) > S.deliveryRadiusKm;
     if (!p) picked.textContent = "";
-    else if (far) picked.innerHTML = `<span style="color:var(--danger)">Sorry, we deliver within ${S.deliveryRadiusKm} km of our kitchen. Please choose Pickup or another address.</span>`;
+    else if (!p.ok) picked.innerHTML = `<span style="color:var(--danger)">📍 ${esc(p.text)}<br>We only deliver across Delhi NCR &amp; Gurgaon.</span>`;
     else picked.textContent = "📍 " + p.text;
-    contBtn.disabled = !p || far;
+    contBtn.disabled = !p;
+    contBtn.classList.toggle("ok", !!(p && p.ok));
   }
 
   function openAddress(done) {
@@ -859,10 +820,14 @@
     if (!window.L) {
       // Map library failed to load (offline / blocked): let people type the address instead.
       $(".map-wrap").innerHTML = `<p class="empty">Map unavailable. Type your full address above and press Continue.</p>`;
-      addrInput.oninput = () => setPending(addrInput.value.trim().length > 8 ? { text: addrInput.value.trim(), lat: null, lng: null } : null);
+      addrInput.oninput = () => {
+        const text = addrInput.value.trim();
+        setPending(text.length > 8 ? { text, lat: null, lng: null, ok: inServiceArea(null, text) } : null);
+      };
       return;
     }
-    const start = state.address && state.address.lat != null ? [state.address.lat, state.address.lng] : [S.shop.lat, S.shop.lng];
+    const start = state.address && state.address.ok && state.address.lat != null
+      ? [state.address.lat, state.address.lng] : [S.shop.lat, S.shop.lng];
     if (!map) {
       map = L.map("map", { zoomControl: true, attributionControl: true }).setView(start, 15);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -879,18 +844,24 @@
     setTimeout(() => map.invalidateSize(), 60);
   }
 
+  let revSeq = 0;
   async function reverseGeocode(lat, lng) {
+    const seq = ++revSeq;
     picked.textContent = "Finding address…";
     contBtn.disabled = true;
+    let p;
     try {
       const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat=${lat}&lon=${lng}`, {
         headers: { "Accept-Language": "en" }
       });
       const j = await r.json();
-      setPending({ text: j.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`, lat, lng });
+      p = { text: j.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`, lat, lng, ok: inServiceArea(j.address || {}, "") };
     } catch {
-      setPending({ text: `Pinned location (${lat.toFixed(5)}, ${lng.toFixed(5)})`, lat, lng });
+      p = { text: `Pinned location (${lat.toFixed(5)}, ${lng.toFixed(5)})`, lat, lng, ok: inServiceBox(lat, lng) };
     }
+    if (seq !== revSeq) return; // a newer map move has started
+    setPending(p);
+    if (!p.ok) notDelivering();
   }
 
   addrInput.addEventListener("input", () => {
@@ -939,6 +910,7 @@
 
   contBtn.onclick = () => {
     if (!pending) return;
+    if (!pending.ok) return notDelivering();
     state.address = pending;
     store.set("address", pending);
     addrDialog.close();
@@ -972,8 +944,8 @@
   $("#brand").textContent = S.name;
   $("#drawerBrand").innerHTML = `${esc(S.name)}<small>${esc(S.tagline)}</small>`;
   $("#drawerInfo").innerHTML = `
-    <p>📍 ${esc(S.shop.address)}</p>
-    <p>🕘 Open daily ${S.openHour}:00 – ${S.closeHour}:00</p>
+    <p>🛵 Pre-orders only · home delivery across Delhi NCR &amp; Gurgaon</p>
+    <p>🕘 Delivery slots ${S.openHour}:00 – ${S.closeHour}:00</p>
     <p>📞 <a href="tel:${esc(S.phone.replace(/\s/g, ""))}">${esc(S.phone)}</a></p>
     <p>💬 <a href="https://wa.me/${esc(S.whatsappNumber)}" target="_blank" rel="noopener">Chat on WhatsApp</a></p>`;
 
