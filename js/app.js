@@ -1,0 +1,983 @@
+(() => {
+  "use strict";
+
+  const S = window.STORE;
+  const MENU = window.MENU;
+  const view = document.getElementById("view");
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+  const money = (n) => S.currency + Math.round(n).toLocaleString("en-IN");
+  const plain = (n) => Math.round(n).toLocaleString("en-IN");
+
+  const store = {
+    get(key, fallback) {
+      try { const v = localStorage.getItem("mk_" + key); return v == null ? fallback : JSON.parse(v); }
+      catch { return fallback; }
+    },
+    set(key, value) {
+      try { localStorage.setItem("mk_" + key, JSON.stringify(value)); } catch { /* storage unavailable */ }
+    }
+  };
+
+  const ITEMS = {};
+  MENU.forEach((cat) => cat.items.forEach((it) => { ITEMS[it.id] = { ...it, category: cat.id }; }));
+
+  let toastTimer;
+  function toast(msg) {
+    const t = $("#toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+  }
+
+  function itemVisual(item, large) {
+    const img = item.images && item.images[0];
+    if (img) return `<img src="${esc(img)}" alt="${esc(item.name)}" loading="${large ? "eager" : "lazy"}">`;
+    return `<div class="emoji-tile" aria-hidden="true">${item.emoji || "🍬"}</div>`;
+  }
+  const vegMark = (item) => (item.veg === false ? "" : `<span class="veg-mark" title="Vegetarian"></span>`);
+  const badgeClass = (b) => (/vrat/i.test(b) ? "vrat" : /new/i.test(b) ? "new" : "");
+  const lowStock = (item) => typeof item.stock === "number" && item.stock > 0 && item.stock <= 10;
+
+  // ---------------------------------------------------------------------------
+  // Cart state
+  // ---------------------------------------------------------------------------
+  const state = {
+    cart: store.get("cart", []),          // [{ key, id, qty, sel: [[choiceIdx...] per group] }]
+    mode: store.get("mode", "Delivery"),  // "Delivery" | "Pickup"
+    address: store.get("address", null),  // { text, lat, lng }
+    coupon: store.get("coupon", ""),
+    customer: store.get("customer", {}),
+    collapsed: {},
+    filters: { q: "", vrat: false, popular: false, under300: false },
+    showSearch: false,
+    showFilters: false,
+    menuScroll: 0
+  };
+  // Drop cart lines whose item no longer exists in the menu.
+  state.cart = state.cart.filter((l) => ITEMS[l.id] && !ITEMS[l.id].soldOut);
+
+  function unitPrice(item, sel) {
+    let p = item.price;
+    (item.options || []).forEach((g, gi) => (sel[gi] || []).forEach((ci) => { p += g.choices[ci]?.price || 0; }));
+    return p;
+  }
+  function selLabel(item, sel) {
+    const parts = [];
+    (item.options || []).forEach((g, gi) => (sel[gi] || []).forEach((ci) => parts.push(g.choices[ci].label)));
+    return parts.join(", ");
+  }
+  const lineKey = (id, sel) => id + "|" + JSON.stringify(sel);
+
+  function saveCart() {
+    store.set("cart", state.cart);
+    const n = state.cart.reduce((a, l) => a + l.qty, 0);
+    const badge = $("#cartCount");
+    badge.hidden = n === 0;
+    badge.textContent = n;
+  }
+  function bumpCart() {
+    const btn = $(".cart-btn");
+    btn.classList.remove("bump");
+    void btn.offsetWidth;
+    btn.classList.add("bump");
+  }
+
+  function addToCart(id, sel, qty = 1) {
+    const key = lineKey(id, sel);
+    const line = state.cart.find((l) => l.key === key);
+    if (line) line.qty += qty;
+    else state.cart.push({ key, id, sel, qty });
+    saveCart();
+    bumpCart();
+    return key;
+  }
+  function setQty(key, qty) {
+    const line = state.cart.find((l) => l.key === key);
+    if (!line) return;
+    const item = ITEMS[line.id];
+    if (typeof item.stock === "number" && qty > item.stock) {
+      toast(`Only ${item.stock} left in stock`);
+      qty = item.stock;
+    }
+    line.qty = qty;
+    if (line.qty <= 0) state.cart = state.cart.filter((l) => l.key !== key);
+    saveCart();
+  }
+  const qtyOfItem = (id) => state.cart.filter((l) => l.id === id).reduce((a, l) => a + l.qty, 0);
+
+  function totals() {
+    const sub = state.cart.reduce((a, l) => a + unitPrice(ITEMS[l.id], l.sel) * l.qty, 0);
+    let discount = 0, couponError = "";
+    const c = state.coupon && S.coupons[state.coupon];
+    if (state.coupon && !c) couponError = "This coupon code is not valid.";
+    else if (c && sub < c.min) couponError = `Add items worth ${money(c.min - sub)} more to use ${state.coupon}.`;
+    else if (c) discount = c.type === "percent" ? Math.round(sub * c.value / 100) : c.value;
+    const afterDiscount = Math.max(0, sub - discount);
+    const delivery = state.mode === "Delivery" && sub > 0 && !(S.freeDeliveryAbove && sub >= S.freeDeliveryAbove)
+      ? S.deliveryFee : 0;
+    const tax = Math.round(afterDiscount * S.taxRate);
+    const total = afterDiscount + delivery + tax;
+    const belowMin = state.mode === "Delivery" && sub < S.minOrder;
+    return { sub, discount, couponError, delivery, tax, total, belowMin };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Router
+  // ---------------------------------------------------------------------------
+  let lastPage = null;
+  function route() {
+    const hash = location.hash.replace(/^#\/?/, "");
+    const [page, arg] = hash.split("/");
+    const navBtn = $("#navBtn");
+    const isMenu = !page;
+    navBtn.innerHTML = isMenu
+      ? `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>`
+      : `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg>`;
+    navBtn.setAttribute("aria-label", isMenu ? "Open menu" : "Back");
+    if (lastPage === "" && !isMenu) state.menuScroll = window.scrollY;
+    lastPage = page || "";
+    $("#drawer").hidden = true;
+    view.onclick = null;
+    view.onkeydown = null;
+
+    if (page === "item" && ITEMS[arg]) renderItem(ITEMS[arg]);
+    else if (page === "cart") renderCart();
+    else if (page === "checkout") renderCheckout();
+    else if (page === "order") renderDone(arg);
+    else renderMenu();
+  }
+
+  // The top-left button opens the drawer on the menu and goes "up" one level elsewhere.
+  const PARENT = { item: "#/", cart: "#/", checkout: "#/cart", order: "#/" };
+  $("#navBtn").addEventListener("click", () => {
+    const page = location.hash.replace(/^#\/?/, "").split("/")[0];
+    if (!page) openDrawer();
+    else location.hash = PARENT[page] || "#/";
+  });
+
+  function go(hash) {
+    if (location.hash === hash) route();
+    else location.hash = hash;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Menu page
+  // ---------------------------------------------------------------------------
+  function matches(item) {
+    const f = state.filters;
+    if (f.q) {
+      const q = f.q.toLowerCase();
+      if (!(item.name + " " + item.desc).toLowerCase().includes(q)) return false;
+    }
+    if (f.vrat && !(item.category === "navratri" || /vrat/i.test(item.badge || ""))) return false;
+    if (f.popular && !/popular/i.test(item.badge || "")) return false;
+    if (f.under300 && item.price >= 300) return false;
+    return true;
+  }
+
+  function cardHTML(item) {
+    const q = qtyOfItem(item.id);
+    const hasOpts = item.options && item.options.length;
+    let action;
+    if (item.soldOut) action = `<button class="add" disabled>SOLD OUT</button>`;
+    else if (!hasOpts && q > 0) {
+      action = `<div class="stepper" data-stop>
+        <button data-dec="${item.id}" aria-label="Remove one">−</button><span>${q}</span><button data-inc="${item.id}" aria-label="Add one">+</button>
+      </div>`;
+    } else action = `<button class="add" data-add="${item.id}">${hasOpts ? "ADD+" : "ADD"}${hasOpts && q ? ` (${q})` : ""}</button>`;
+
+    return `<article class="item${item.soldOut ? " sold" : ""}" data-open="${item.id}" tabindex="0" role="link" aria-label="${esc(item.name)}">
+      <div class="thumb">
+        ${itemVisual(item)}
+        ${lowStock(item) && !item.soldOut ? `<span class="flag">ONLY ${item.stock} LEFT!</span>` : ""}
+      </div>
+      <div class="info">
+        ${item.badge ? `<span class="tag ${badgeClass(item.badge)}">${esc(item.badge)}</span>` : ""}
+        <div class="name-row"><h3>${esc(item.name)}</h3>${vegMark(item)}</div>
+        <p class="desc">${esc(item.desc)}</p>
+        <div class="buy"><span class="price">${plain(item.price)}</span>${action}</div>
+      </div>
+    </article>`;
+  }
+
+  function renderMenu() {
+    document.title = `${S.name} · Order Mithai Online`;
+    const f = state.filters;
+    const cats = MENU.map((cat) => ({ ...cat, list: cat.items.map((i) => ITEMS[i.id]).filter(matches) }))
+      .filter((c) => c.list.length);
+    const filtering = f.q || f.vrat || f.popular || f.under300;
+
+    view.innerHTML = `
+      <div class="toolbar">
+        <button class="pill" id="catBtn">Menu</button>
+        <span class="spacer"></span>
+        <button class="round${state.showSearch ? " on" : ""}" id="searchBtn" aria-label="Search">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10 2a8 8 0 0 1 6.3 12.9l5.4 5.4-1.4 1.4-5.4-5.4A8 8 0 1 1 10 2Zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12Z"/></svg>
+        </button>
+        <button class="round${state.showFilters || filtering ? " on" : ""}" id="filterBtn" aria-label="Filters">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 3h2v5h2v2H4V8h2V3Zm0 9h2v9H6v-9Zm5 3h2v6h-2v-6Zm0-12h2v8h2v2H9v-2h2V3Zm5 0h2v11h2v2h-6v-2h2V3Zm0 15h2v3h-2v-3Z"/></svg>
+        </button>
+      </div>
+      <div class="search-row" ${state.showSearch ? "" : "hidden"}>
+        <input id="q" type="search" placeholder="Search kaju katli, ghewar, combos…" value="${esc(f.q)}" autocomplete="off">
+      </div>
+      <div class="filter-row" ${state.showFilters ? "" : "hidden"}>
+        <button class="chip${f.vrat ? " on" : ""}" data-filter="vrat">🪔 Vrat friendly</button>
+        <button class="chip${f.popular ? " on" : ""}" data-filter="popular">⭐ Popular</button>
+        <button class="chip${f.under300 ? " on" : ""}" data-filter="under300">Under ${S.currency}300</button>
+      </div>
+      ${S.banner && !filtering ? `<section class="banner">
+        <h3>${esc(S.banner.title)}</h3><p>${esc(S.banner.text)}</p>
+        <button data-jump="${esc(S.banner.category)}">${esc(S.banner.cta)} →</button>
+      </section>` : ""}
+      ${cats.map((cat) => `
+        <section class="category${state.collapsed[cat.id] && !filtering ? " collapsed" : ""}" id="cat-${cat.id}">
+          <button class="cat-head" data-toggle="${cat.id}" aria-expanded="${!state.collapsed[cat.id]}">
+            <h2>${esc(cat.name)} <small>(${cat.list.length})</small></h2>
+            <svg class="chev" viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="m12 8-6 6 1.4 1.4 4.6-4.6 4.6 4.6L18 14z"/></svg>
+          </button>
+          ${cat.subtitle ? `<p class="cat-sub">${esc(cat.subtitle)}</p>` : ""}
+          <div class="items">${cat.list.map(cardHTML).join("")}</div>
+        </section>`).join("") || `<p class="empty">No items match your search.</p>`}
+      <footer class="site-foot">
+        <strong>${esc(S.name)}</strong> · ${esc(S.city)}<br>
+        ${esc(S.phone)} · ${esc(S.email)}<br>
+        All our mithai is 100% vegetarian. Images are for representation only.
+      </footer>
+      ${cartBarHTML()}`;
+
+    bindMenu();
+    requestAnimationFrame(() => window.scrollTo(0, state.menuScroll));
+    if (state.showSearch && f.q) {
+      const q = $("#q");
+      q.focus();
+      q.setSelectionRange(q.value.length, q.value.length);
+    }
+  }
+
+  function cartBarHTML() {
+    const n = state.cart.reduce((a, l) => a + l.qty, 0);
+    if (!n) return "";
+    return `<a class="cart-bar" href="#/cart"><span>${n} item${n > 1 ? "s" : ""} · ${money(totals().sub)}</span><span>View Cart →</span></a>`;
+  }
+
+  function refreshMenuCards(id) {
+    $$(`[data-open="${id}"]`).forEach((el) => { el.outerHTML = cardHTML(ITEMS[id]); });
+    const bar = $(".cart-bar");
+    const html = cartBarHTML();
+    if (bar) bar.outerHTML = html || "<span></span>";
+    else if (html) view.insertAdjacentHTML("beforeend", html);
+  }
+
+  function bindMenu() {
+    $("#catBtn").onclick = openCategoryPicker;
+    $("#searchBtn").onclick = () => {
+      state.showSearch = !state.showSearch;
+      if (!state.showSearch) state.filters.q = "";
+      state.menuScroll = window.scrollY;
+      renderMenu();
+      if (state.showSearch) $("#q").focus();
+    };
+    $("#filterBtn").onclick = () => { state.showFilters = !state.showFilters; state.menuScroll = window.scrollY; renderMenu(); };
+    const q = $("#q");
+    let t;
+    q.oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(() => { state.filters.q = q.value.trim(); state.menuScroll = 0; renderMenu(); }, 250);
+    };
+
+    view.onclick = (e) => {
+      const el = e.target.closest("[data-filter],[data-toggle],[data-jump],[data-add],[data-inc],[data-dec],[data-stop],[data-open]");
+      if (!el) return;
+      const d = el.dataset;
+      if (d.filter) {
+        state.filters[d.filter] = !state.filters[d.filter];
+        state.menuScroll = window.scrollY;
+        renderMenu();
+      } else if (d.toggle) {
+        state.collapsed[d.toggle] = !state.collapsed[d.toggle];
+        el.closest(".category").classList.toggle("collapsed");
+        el.setAttribute("aria-expanded", !state.collapsed[d.toggle]);
+      } else if (d.jump) {
+        jumpTo(d.jump);
+      } else if (d.add) {
+        const item = ITEMS[d.add];
+        if (item.options && item.options.length) openItem(item.id);
+        else { addToCart(item.id, []); toast(`${item.name} added`); refreshMenuCards(item.id); }
+      } else if (d.inc || d.dec) {
+        const id = d.inc || d.dec;
+        const key = lineKey(id, []);
+        const line = state.cart.find((l) => l.key === key);
+        setQty(key, (line ? line.qty : 0) + (d.inc ? 1 : -1));
+        refreshMenuCards(id);
+      } else if (d.stop) {
+        /* clicks between stepper buttons shouldn't open the item */
+      } else if (d.open) {
+        openItem(d.open);
+      }
+    };
+    view.onkeydown = (e) => {
+      if (e.key === "Enter" && e.target.dataset && e.target.dataset.open) openItem(e.target.dataset.open);
+    };
+  }
+
+  function openItem(id) {
+    state.menuScroll = window.scrollY;
+    location.hash = "#/item/" + id;
+  }
+
+  function jumpTo(catId) {
+    state.collapsed[catId] = false;
+    if (location.hash.replace(/^#\/?/, "")) {
+      state.menuScroll = 0;
+      location.hash = "#/";
+      setTimeout(() => jumpTo(catId), 50);
+      return;
+    }
+    const sec = document.getElementById("cat-" + catId);
+    if (!sec) {
+      // The category is hidden by filters — clear them and try again.
+      state.filters = { q: "", vrat: false, popular: false, under300: false };
+      renderMenu();
+      return jumpTo(catId);
+    }
+    sec.classList.remove("collapsed");
+    sec.scrollIntoView({ behavior: "smooth" });
+  }
+
+  function openCategoryPicker() {
+    const scrim = document.createElement("div");
+    scrim.className = "scrim";
+    const pop = document.createElement("div");
+    pop.className = "cat-pop";
+    pop.setAttribute("role", "menu");
+    pop.innerHTML = MENU.map((c) => `<button role="menuitem" data-cat="${c.id}"><span>${esc(c.name)}</span><span>${c.items.length}</span></button>`).join("");
+    const close = () => { scrim.remove(); pop.remove(); };
+    scrim.onclick = close;
+    pop.onclick = (e) => { const b = e.target.closest("[data-cat]"); if (b) { close(); jumpTo(b.dataset.cat); } };
+    document.body.append(scrim, pop);
+    pop.querySelector("button").focus();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Item page
+  // ---------------------------------------------------------------------------
+  function renderItem(item) {
+    document.title = `${item.name} · ${S.name}`;
+    window.scrollTo(0, 0);
+    const groups = item.options || [];
+    const sel = groups.map(() => []);
+    let qty = 1;
+    let addedKey = null;
+    let imgIdx = 0;
+    const images = item.images || [];
+
+    view.innerHTML = `
+      <div class="detail-wrap">
+        <div class="gallery">
+          <div class="gallery-main" id="galleryMain">${itemVisual(item, true)}</div>
+          ${images.length > 1 ? `<div class="thumbs">${images.map((src, i) => `<button data-img="${i}" class="${i ? "" : "on"}"><img src="${esc(src)}" alt=""></button>`).join("")}</div>` : ""}
+        </div>
+        <div class="detail">
+          ${item.badge ? `<span class="tag ${badgeClass(item.badge)}">${esc(item.badge)}</span>` : ""}
+          <div class="detail-head">${vegMark(item)}<h1>${esc(item.name)}</h1><span class="price">${plain(item.price)}.00</span></div>
+          <p class="desc-full">${esc(item.desc)}${lowStock(item) ? `<br><strong style="color:var(--danger)">Only ${item.stock} left!</strong>` : ""}</p>
+          <form id="optForm">
+            ${groups.map((g, gi) => `
+              <fieldset class="group" data-group="${gi}">
+                <legend>${esc(g.name)} <small>(<span data-count="${gi}">0</span>/${g.max || 1})</small>${g.required ? ` <span class="req">*</span>` : ""}</legend>
+                ${g.choices.map((c, ci) => `
+                  <label class="choice">
+                    <input type="${(g.max || 1) === 1 && g.required ? "radio" : "checkbox"}" name="g${gi}" value="${ci}">
+                    <span>${esc(c.label)}</span>
+                    <em>${c.price >= 0 ? "+" : "−"} ${plain(Math.abs(c.price))}.00</em>
+                  </label>`).join("")}
+              </fieldset>`).join("")}
+          </form>
+        </div>
+      </div>
+      <div class="sticky-foot"><div class="inner" id="itemFoot"></div></div>`;
+
+    const foot = $("#itemFoot");
+
+    function drawFoot() {
+      if (item.soldOut) {
+        foot.innerHTML = `<button class="btn primary" disabled>Sold out</button>`;
+        return;
+      }
+      if (addedKey) {
+        const line = state.cart.find((l) => l.key === addedKey);
+        const q = line ? line.qty : 0;
+        foot.innerHTML = `
+          <div class="stepper lg"><button data-q="-1" aria-label="Remove one">−</button><span>${q}</span><button data-q="1" aria-label="Add one">+</button></div>
+          <a class="btn primary" href="#/cart">🛒 Go to cart</a>`;
+        return;
+      }
+      const price = unitPrice(item, sel) * qty;
+      foot.innerHTML = `
+        <div class="stepper lg"><button data-q="-1" aria-label="Decrease">−</button><span>${qty}</span><button data-q="1" aria-label="Increase">+</button></div>
+        <button class="btn primary" id="addBtn">Add to cart · ${money(price)}</button>`;
+    }
+
+    foot.onclick = (e) => {
+      const stepBtn = e.target.closest("[data-q]");
+      if (stepBtn) {
+        const d = Number(stepBtn.dataset.q);
+        if (addedKey) {
+          const line = state.cart.find((l) => l.key === addedKey);
+          setQty(addedKey, (line ? line.qty : 0) + d);
+          if (!state.cart.find((l) => l.key === addedKey)) { addedKey = null; qty = 1; }
+        } else {
+          qty = Math.max(1, qty + d);
+          if (typeof item.stock === "number" && qty > item.stock) { qty = item.stock; toast(`Only ${item.stock} left in stock`); }
+        }
+        drawFoot();
+        return;
+      }
+      if (e.target.closest("#addBtn")) {
+        const missing = groups.findIndex((g, gi) => g.required && !sel[gi].length);
+        $$(".group").forEach((f) => f.classList.remove("invalid"));
+        if (missing >= 0) {
+          const f = $(`[data-group="${missing}"]`);
+          f.classList.add("invalid");
+          f.scrollIntoView({ behavior: "smooth", block: "center" });
+          toast(`Please choose: ${groups[missing].name}`);
+          return;
+        }
+        addedKey = addToCart(item.id, sel.map((s) => [...s].sort((a, b) => a - b)), qty);
+        toast(`${item.name} added to cart`);
+        drawFoot();
+      }
+    };
+
+    $("#optForm").onchange = (e) => {
+      const input = e.target;
+      const gi = Number(input.name.slice(1));
+      const g = groups[gi];
+      const max = g.max || 1;
+      const checked = $$(`input[name="g${gi}"]:checked`).map((i) => Number(i.value));
+      if (input.type === "checkbox" && checked.length > max) {
+        if (max === 1) {
+          // Behave like a radio that can be un-ticked.
+          $$(`input[name="g${gi}"]`).forEach((i) => { if (i !== input) i.checked = false; });
+        } else {
+          input.checked = false;
+          toast(`You can pick up to ${max}`);
+        }
+      }
+      sel[gi] = $$(`input[name="g${gi}"]:checked`).map((i) => Number(i.value));
+      $(`[data-count="${gi}"]`).textContent = sel[gi].length;
+      if (sel[gi].length) $(`[data-group="${gi}"]`).classList.remove("invalid");
+      addedKey = null;
+      qty = 1;
+      drawFoot();
+    };
+
+    const thumbs = $(".thumbs");
+    if (thumbs) thumbs.onclick = (e) => {
+      const b = e.target.closest("[data-img]");
+      if (!b) return;
+      imgIdx = Number(b.dataset.img);
+      $("#galleryMain").innerHTML = `<img src="${esc(images[imgIdx])}" alt="${esc(item.name)}">`;
+      $$(".thumbs button").forEach((t, i) => t.classList.toggle("on", i === imgIdx));
+    };
+
+    drawFoot();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cart page
+  // ---------------------------------------------------------------------------
+  function billHTML(t) {
+    return `<div class="bill">
+      <div class="row"><span>Item Sub Total</span><span>${money(t.sub)}</span></div>
+      ${t.discount ? `<div class="row off"><span>Coupon (${esc(state.coupon)})</span><span>− ${money(t.discount)}</span></div>` : ""}
+      ${state.mode === "Delivery" ? `<div class="row"><span>Delivery Charges</span><span>${t.delivery ? money(t.delivery) : "FREE"}</span></div>` : ""}
+      <div class="row"><span>Taxes and Charges</span><span>${money(t.tax)}</span></div>
+      <div class="row total"><span>To Pay</span><span>${money(t.total)}</span></div>
+    </div>`;
+  }
+
+  function renderCart() {
+    document.title = `Your Order · ${S.name}`;
+    if (!state.cart.length) {
+      view.innerHTML = `<div class="page"><h1>Your Order</h1>
+        <p class="empty">🪔<br><br>Your cart is empty.<br>Add some mithai to get started.</p>
+        <a class="btn primary block" href="#/">Browse menu</a></div>`;
+      return;
+    }
+    const t = totals();
+    const freeGap = S.freeDeliveryAbove && state.mode === "Delivery" && t.sub < S.freeDeliveryAbove
+      ? S.freeDeliveryAbove - t.sub : 0;
+    const bestCoupon = Object.entries(S.coupons)[0];
+
+    view.innerHTML = `
+      <div class="page">
+        <h1>Your Order</h1>
+        <p class="sub">from ${esc(S.name)}, ${esc(S.city)} ${esc(state.mode)}</p>
+        <div class="mode-switch" role="tablist">
+          ${["Delivery", "Pickup"].map((m) => `<button role="tab" data-mode="${m}" class="${state.mode === m ? "on" : ""}">${m}</button>`).join("")}
+        </div>
+        ${state.cart.map((l) => {
+          const item = ITEMS[l.id];
+          return `<div class="line">
+            <div><div class="nm">${vegMark(item).replace("veg-mark", "veg-mark inline")} ${esc(item.name)}</div>${l.sel.flat().length ? `<div class="opt">${esc(selLabel(item, l.sel))}</div>` : ""}</div>
+            <div class="stepper"><button data-key="${esc(l.key)}" data-d="-1" aria-label="Remove one">−</button><span>${l.qty}</span><button data-key="${esc(l.key)}" data-d="1" aria-label="Add one">+</button></div>
+            <div class="amt">${money(unitPrice(item, l.sel) * l.qty)}</div>
+          </div>`;
+        }).join("")}
+        <p><a href="#/" class="link-btn">+ ADD MORE ITEMS</a></p>
+        ${bestCoupon && !state.coupon ? `<div class="promo"><span>🎉 ${esc(bestCoupon[1].label)}</span><button class="btn ghost" style="color:#fff;border-color:#fff;padding:6px 12px;font-size:.75rem" data-apply="${esc(bestCoupon[0])}">Apply ${esc(bestCoupon[0])}</button></div>` : ""}
+        <div class="coupon">
+          <span aria-hidden="true">🏷️</span>
+          ${state.coupon && !t.couponError
+            ? `<span class="applied">${esc(state.coupon)} applied · you save ${money(t.discount)}</span><button class="link-btn" data-remove-coupon>REMOVE</button>`
+            : `<input id="couponInput" placeholder="APPLY COUPON" value="${esc(state.coupon)}" aria-label="Coupon code"><button class="link-btn" id="couponBtn">APPLY</button>`}
+        </div>
+        ${t.couponError ? `<p class="coupon-msg err">${esc(t.couponError)}</p>` : ""}
+        ${billHTML(t)}
+        ${freeGap ? `<p class="note">Add ${money(freeGap)} more for FREE delivery.</p>` : ""}
+        ${t.belowMin ? `<p class="note">Minimum order for delivery is ${money(S.minOrder)}.</p>` : ""}
+      </div>
+      <div class="sticky-foot pay-foot"><div class="inner">
+        <div class="topay"><span>To Pay</span><span>${money(t.total)}</span></div>
+        <button class="btn primary block" id="proceed" ${t.belowMin ? "disabled" : ""}>Proceed</button>
+      </div></div>`;
+
+    view.onclick = (e) => {
+      const b = e.target.closest("[data-key],[data-mode],[data-apply],[data-remove-coupon],#couponBtn,#proceed");
+      if (!b) return;
+      if (b.dataset.key) {
+        const line = state.cart.find((l) => l.key === b.dataset.key);
+        setQty(b.dataset.key, line.qty + Number(b.dataset.d));
+        renderCart();
+      } else if (b.dataset.mode) {
+        state.mode = b.dataset.mode; store.set("mode", state.mode); renderCart();
+      } else if (b.dataset.apply) {
+        applyCoupon(b.dataset.apply);
+      } else if ("removeCoupon" in b.dataset) {
+        state.coupon = ""; store.set("coupon", ""); renderCart();
+      } else if (b.id === "couponBtn") {
+        applyCoupon($("#couponInput").value);
+      } else if (b.id === "proceed") {
+        if (state.mode === "Delivery" && !state.address) openAddress(() => go("#/checkout"));
+        else go("#/checkout");
+      }
+    };
+    const ci = $("#couponInput");
+    if (ci) ci.onkeydown = (e) => { if (e.key === "Enter") applyCoupon(ci.value); };
+  }
+
+  function applyCoupon(code) {
+    state.coupon = code.trim().toUpperCase();
+    store.set("coupon", state.coupon);
+    const t = totals();
+    if (state.coupon && !t.couponError) toast(`Coupon applied! You save ${money(t.discount)}`);
+    renderCart();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Checkout page
+  // ---------------------------------------------------------------------------
+  function buildSlots() {
+    const days = [];
+    const now = new Date();
+    const earliest = new Date(now.getTime() + S.prepMinutes * 60000);
+    const hm = (d) => `${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const ap = (d) => (d.getHours() < 12 ? "AM" : "PM");
+    // "9:00 – 10:30 AM", or "11:30 AM – 1:00 PM" when the slot crosses noon.
+    const range = (a, b) => (ap(a) === ap(b) ? `${hm(a)} – ${hm(b)} ${ap(b)}` : `${hm(a)} ${ap(a)} – ${hm(b)} ${ap(b)}`);
+    for (let d = 0; d <= S.preorderDays; d++) {
+      const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
+      const slots = [];
+      for (let h = S.openHour; h + S.slotHours <= S.closeHour + 1e-9; h += S.slotHours) {
+        const start = new Date(day); start.setHours(Math.floor(h), Math.round((h % 1) * 60), 0, 0);
+        const end = new Date(start.getTime() + S.slotHours * 3600000);
+        if (start >= earliest) slots.push(range(start, end));
+      }
+      if (slots.length) {
+        const label = d === 0 ? "Today" : d === 1 ? "Tomorrow" : day.toLocaleDateString("en-IN", { weekday: "short" });
+        days.push({ label: `${label}, ${day.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`, slots });
+      }
+    }
+    return days;
+  }
+
+  function renderCheckout() {
+    document.title = `Checkout · ${S.name}`;
+    if (!state.cart.length) return go("#/cart");
+    const t = totals();
+    if (t.belowMin) return go("#/cart");
+    window.scrollTo(0, 0);
+    const c = state.customer;
+    const days = buildSlots();
+    const delivery = state.mode === "Delivery";
+
+    view.innerHTML = `
+      <form class="page" id="checkoutForm" novalidate>
+        <div class="field">
+          <span class="lbl">${delivery ? "Delivery" : "Pickup"} Slot <span class="req">*</span></span>
+          <div class="two">
+            <select id="day" aria-label="Date">${days.map((d, i) => `<option value="${i}">${esc(d.label)}</option>`).join("")}</select>
+            <select id="slot" aria-label="Time slot"></select>
+          </div>
+        </div>
+        <div class="field" data-f="name">
+          <label for="name">Name <span class="req">*</span></label>
+          <input id="name" autocomplete="name" value="${esc(c.name)}" required>
+          <div class="err">Please enter your name</div>
+        </div>
+        <div class="field" data-f="email">
+          <label for="email">Email <span class="req">*</span></label>
+          <input id="email" type="email" autocomplete="email" value="${esc(c.email)}" required>
+          <div class="err">Please enter a valid email</div>
+        </div>
+        <div class="field" data-f="phone">
+          <label for="phone">Mobile Number for Order Notifications <span class="req">*</span></label>
+          <div class="phone"><span>+91</span><input id="phone" type="tel" inputmode="numeric" maxlength="10" autocomplete="tel-national" value="${esc(c.phone)}" required></div>
+          <div class="err">Please enter a 10-digit mobile number</div>
+        </div>
+        ${delivery ? `
+          <div class="field" data-f="address">
+            <div class="lbl-row"><span class="lbl">Delivering to <span class="req">*</span> <small>(as on map)</small></span><button type="button" class="link-btn" id="changeAddr">CHANGE</button></div>
+            <div class="addr-box${state.address ? "" : " empty"}" id="addrBox">${state.address ? esc(state.address.text) : "Tap to pick your delivery location"}</div>
+            <div class="err">Please pick your delivery location</div>
+          </div>
+          <div class="field" data-f="house">
+            <label for="house">House No / Apartment <span class="req">*</span></label>
+            <input id="house" autocomplete="address-line1" value="${esc(c.house)}" required>
+            <div class="err">Please enter your house / flat number</div>
+          </div>
+          <div class="field">
+            <label for="landmark">Nearest Landmark <small>(optional)</small></label>
+            <input id="landmark" value="${esc(c.landmark)}">
+          </div>` : `
+          <div class="field">
+            <span class="lbl">Pick up from</span>
+            <div class="addr-box">${esc(S.name)}<br>${esc(S.shop.address)}</div>
+          </div>`}
+        <div class="field">
+          <button type="button" class="toggle-more" id="moreBtn">Add more instructions +</button>
+          <textarea id="notes" rows="3" placeholder="Message on box, sugar preference, gate code…" hidden></textarea>
+        </div>
+        <div class="field">
+          <span class="lbl">Payment <span class="req">*</span></span>
+          <div class="pay-opts">
+            ${S.upiId ? `<label><input type="radio" name="pay" value="UPI" checked> Pay now with UPI (GPay / PhonePe / Paytm)</label>` : ""}
+            <label><input type="radio" name="pay" value="COD" ${S.upiId ? "" : "checked"}> Cash / UPI on ${delivery ? "delivery" : "pickup"}</label>
+          </div>
+        </div>
+        ${billHTML(t)}
+      </form>
+      <div class="sticky-foot pay-foot"><div class="inner">
+        <div class="topay"><span>To Pay</span><span>${money(t.total)}</span></div>
+        <button class="btn primary block" id="payNow" type="submit" form="checkoutForm">${S.upiId ? "Pay Now" : "Place Order"}</button>
+      </div></div>`;
+
+    const daySel = $("#day"), slotSel = $("#slot");
+    const fillSlots = () => {
+      const d = days[Number(daySel.value)];
+      slotSel.innerHTML = d ? d.slots.map((s) => `<option>${esc(s)}</option>`).join("") : "";
+    };
+    daySel.onchange = fillSlots;
+    fillSlots();
+
+    $("#phone").oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, "").slice(0, 10); };
+    $("#moreBtn").onclick = (e) => { e.target.hidden = true; const n = $("#notes"); n.hidden = false; n.focus(); };
+    if (delivery) {
+      const pick = () => openAddress(() => renderCheckout());
+      $("#changeAddr").onclick = pick;
+      $("#addrBox").onclick = () => { if (!state.address) pick(); };
+    }
+
+    $("#checkoutForm").onsubmit = (e) => {
+      e.preventDefault();
+      const v = (id) => ($("#" + id)?.value || "").trim();
+      const checks = {
+        name: v("name").length >= 2,
+        email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v("email")),
+        phone: /^[6-9]\d{9}$/.test(v("phone")),
+        address: !delivery || !!state.address,
+        house: !delivery || v("house").length > 0
+      };
+      let firstBad = null;
+      Object.entries(checks).forEach(([k, ok]) => {
+        const f = $(`[data-f="${k}"]`);
+        if (!f) return;
+        f.classList.toggle("bad", !ok);
+        if (!ok && !firstBad) firstBad = f;
+      });
+      if (firstBad) { firstBad.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
+      if (!days.length) { toast("No slots available right now. Please call us to order."); return; }
+
+      state.customer = { name: v("name"), email: v("email"), phone: v("phone"), house: v("house"), landmark: v("landmark") };
+      store.set("customer", state.customer);
+      placeOrder({
+        slot: `${days[Number(daySel.value)].label}, ${slotSel.value}`,
+        notes: v("notes"),
+        payment: $("input[name=pay]:checked").value
+      });
+    };
+  }
+
+  function placeOrder({ slot, notes, payment }) {
+    const t = totals();
+    const now = new Date();
+    const id = "MK" + now.toISOString().slice(2, 10).replace(/-/g, "") + Math.floor(1000 + Math.random() * 9000);
+    const c = state.customer;
+    const order = {
+      id,
+      placedAt: now.toISOString(),
+      mode: state.mode,
+      slot,
+      payment,
+      customer: { name: c.name, email: c.email, phone: "+91" + c.phone },
+      address: state.mode === "Delivery"
+        ? { line: c.house, landmark: c.landmark, map: state.address.text, lat: state.address.lat, lng: state.address.lng }
+        : null,
+      items: state.cart.map((l) => {
+        const item = ITEMS[l.id];
+        return { name: item.name, options: selLabel(item, l.sel), qty: l.qty, price: unitPrice(item, l.sel) * l.qty };
+      }),
+      coupon: t.discount ? state.coupon : "",
+      notes,
+      totals: { sub: t.sub, discount: t.discount, delivery: t.delivery, tax: t.tax, total: t.total }
+    };
+
+    const orders = store.get("orders", {});
+    orders[id] = order;
+    store.set("orders", orders);
+
+    if (S.orderWebhook) {
+      fetch(S.orderWebhook, {
+        method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(order)
+      }).catch(() => {});
+    }
+
+    state.cart = [];
+    state.coupon = "";
+    store.set("coupon", "");
+    saveCart();
+    go("#/order/" + id);
+  }
+
+  function whatsappText(o) {
+    const lines = [
+      `*New order ${o.id}* — ${S.name}`,
+      `${o.mode} · ${o.slot}`,
+      "",
+      ...o.items.map((i) => `• ${i.qty} × ${i.name}${i.options ? ` (${i.options})` : ""} — ${money(i.price)}`),
+      "",
+      `Sub total: ${money(o.totals.sub)}`,
+      o.totals.discount ? `Coupon ${o.coupon}: −${money(o.totals.discount)}` : "",
+      o.mode === "Delivery" ? `Delivery: ${o.totals.delivery ? money(o.totals.delivery) : "FREE"}` : "",
+      `Taxes: ${money(o.totals.tax)}`,
+      `*To pay: ${money(o.totals.total)}* (${o.payment === "UPI" ? "UPI" : "Cash/UPI on " + o.mode.toLowerCase()})`,
+      "",
+      `Name: ${o.customer.name}`,
+      `Phone: ${o.customer.phone}`,
+      `Email: ${o.customer.email}`
+    ];
+    if (o.address) {
+      lines.push(`Address: ${o.address.line}, ${o.address.map}`);
+      if (o.address.landmark) lines.push(`Landmark: ${o.address.landmark}`);
+      if (o.address.lat) lines.push(`Map: https://maps.google.com/?q=${o.address.lat},${o.address.lng}`);
+    }
+    if (o.notes) lines.push(`Notes: ${o.notes}`);
+    return lines.filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n");
+  }
+
+  function renderDone(id) {
+    const o = store.get("orders", {})[id];
+    if (!o) return go("#/");
+    document.title = `Order ${o.id} · ${S.name}`;
+    window.scrollTo(0, 0);
+    const wa = `https://wa.me/${S.whatsappNumber}?text=${encodeURIComponent(whatsappText(o))}`;
+    const upi = `upi://pay?pa=${encodeURIComponent(S.upiId)}&pn=${encodeURIComponent(S.name)}&am=${o.totals.total}&cu=INR&tn=${encodeURIComponent("Order " + o.id)}`;
+
+    view.innerHTML = `
+      <div class="page done">
+        <div class="tick" aria-hidden="true">✓</div>
+        <h1>Order received!</h1>
+        <p class="sub">Order ID <strong>${esc(o.id)}</strong><br>${esc(o.mode)} · ${esc(o.slot)}</p>
+        <div class="actions">
+          <a class="btn green block" href="${wa}" target="_blank" rel="noopener">Confirm order on WhatsApp</a>
+          ${o.payment === "UPI" && S.upiId ? `<a class="btn primary block" href="${upi}">Pay ${money(o.totals.total)} with UPI</a>` : ""}
+        </div>
+        ${o.payment === "UPI" && S.upiId ? `<div class="upi">On a computer? Pay <strong>${money(o.totals.total)}</strong> to UPI ID <code>${esc(S.upiId)}</code> and mention <code>${esc(o.id)}</code>.</div>` : ""}
+        <div class="card">
+          <h3>Order summary</h3>
+          ${o.items.map((i) => `<div class="bill"><div class="row"><span>${i.qty} × ${esc(i.name)}${i.options ? `<br><small style="color:var(--muted)">${esc(i.options)}</small>` : ""}</span><span>${money(i.price)}</span></div></div>`).join("")}
+          <div class="bill"><div class="row total"><span>Total</span><span>${money(o.totals.total)}</span></div></div>
+          ${o.address ? `<p class="sub" style="margin-top:12px">📍 ${esc(o.address.line)}, ${esc(o.address.map)}</p>` : `<p class="sub" style="margin-top:12px">📍 Pickup from ${esc(S.shop.address)}</p>`}
+        </div>
+        <a class="btn ghost block" href="#/">Back to menu</a>
+      </div>`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Address picker (OpenStreetMap + Leaflet, no API key needed)
+  // ---------------------------------------------------------------------------
+  const addrDialog = $("#addressDialog");
+  const addrInput = $("#addrInput");
+  const sugg = $("#addrSuggestions");
+  const picked = $("#addrPicked");
+  const contBtn = $("#addrContinue");
+  let map = null, pending = null, onAddrDone = null, searchTimer, revTimer, searchAbort;
+
+  const distanceKm = (a, b) => {
+    const R = 6371, rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  };
+
+  function setPending(p) {
+    pending = p;
+    const far = p && p.lat != null && S.deliveryRadiusKm && distanceKm(S.shop, p) > S.deliveryRadiusKm;
+    if (!p) picked.textContent = "";
+    else if (far) picked.innerHTML = `<span style="color:var(--danger)">Sorry, we deliver within ${S.deliveryRadiusKm} km of our kitchen. Please choose Pickup or another address.</span>`;
+    else picked.textContent = "📍 " + p.text;
+    contBtn.disabled = !p || far;
+  }
+
+  function openAddress(done) {
+    onAddrDone = done;
+    addrInput.value = "";
+    sugg.hidden = true;
+    setPending(state.address);
+    addrDialog.showModal();
+    if (!window.L) {
+      // Map library failed to load (offline / blocked): let people type the address instead.
+      $(".map-wrap").innerHTML = `<p class="empty">Map unavailable. Type your full address above and press Continue.</p>`;
+      addrInput.oninput = () => setPending(addrInput.value.trim().length > 8 ? { text: addrInput.value.trim(), lat: null, lng: null } : null);
+      return;
+    }
+    const start = state.address && state.address.lat != null ? [state.address.lat, state.address.lng] : [S.shop.lat, S.shop.lng];
+    if (!map) {
+      map = L.map("map", { zoomControl: true, attributionControl: true }).setView(start, 15);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19, attribution: "© OpenStreetMap"
+      }).addTo(map);
+      map.on("moveend", () => {
+        clearTimeout(revTimer);
+        const c = map.getCenter();
+        revTimer = setTimeout(() => reverseGeocode(c.lat, c.lng), 450);
+      });
+    } else {
+      map.setView(start, 16);
+    }
+    setTimeout(() => map.invalidateSize(), 60);
+  }
+
+  async function reverseGeocode(lat, lng) {
+    picked.textContent = "Finding address…";
+    contBtn.disabled = true;
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat=${lat}&lon=${lng}`, {
+        headers: { "Accept-Language": "en" }
+      });
+      const j = await r.json();
+      setPending({ text: j.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`, lat, lng });
+    } catch {
+      setPending({ text: `Pinned location (${lat.toFixed(5)}, ${lng.toFixed(5)})`, lat, lng });
+    }
+  }
+
+  addrInput.addEventListener("input", () => {
+    if (!window.L) return;
+    clearTimeout(searchTimer);
+    const q = addrInput.value.trim();
+    if (q.length < 3) { sugg.hidden = true; return; }
+    searchTimer = setTimeout(async () => {
+      if (searchAbort) searchAbort.abort();
+      searchAbort = new AbortController();
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=in&q=${encodeURIComponent(q)}`, {
+          signal: searchAbort.signal, headers: { "Accept-Language": "en" }
+        });
+        const list = await r.json();
+        sugg.innerHTML = list.length
+          ? list.map((p, i) => {
+              const [head, ...rest] = p.display_name.split(", ");
+              return `<li data-i="${i}"><b>${esc(head)}</b> ${esc(rest.join(", "))}</li>`;
+            }).join("")
+          : `<li class="muted">No places found. Try a nearby landmark, then move the map.</li>`;
+        sugg.hidden = false;
+        sugg.onclick = (e) => {
+          const li = e.target.closest("[data-i]");
+          if (!li) return;
+          const p = list[Number(li.dataset.i)];
+          sugg.hidden = true;
+          addrInput.value = p.display_name;
+          map.setView([Number(p.lat), Number(p.lon)], 17);
+        };
+      } catch (err) {
+        if (err.name !== "AbortError") { sugg.innerHTML = `<li class="muted">Search unavailable — move the map to your location.</li>`; sugg.hidden = false; }
+      }
+    }, 400);
+  });
+
+  $("#locateBtn").onclick = () => {
+    if (!navigator.geolocation || !map) return toast("Location isn't available on this device");
+    toast("Finding your location…");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => map.setView([pos.coords.latitude, pos.coords.longitude], 18),
+      () => toast("Couldn't get your location. Please search instead."),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  contBtn.onclick = () => {
+    if (!pending) return;
+    state.address = pending;
+    store.set("address", pending);
+    addrDialog.close();
+    if (onAddrDone) onAddrDone();
+  };
+  addrDialog.addEventListener("click", (e) => {
+    if (e.target.closest("[data-close]")) addrDialog.close();
+    else if (!e.target.closest(".addr-search")) sugg.hidden = true;
+  });
+
+  // ---------------------------------------------------------------------------
+  // Drawer
+  // ---------------------------------------------------------------------------
+  const drawer = $("#drawer");
+  function openDrawer() { drawer.hidden = false; }
+  drawer.addEventListener("click", (e) => {
+    const link = e.target.closest("[data-close-drawer]");
+    if (e.target === drawer || link) drawer.hidden = true;
+    if (link && link.dataset.jump) { e.preventDefault(); jumpTo(link.dataset.jump); }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      drawer.hidden = true;
+      $$(".scrim, .cat-pop").forEach((n) => n.remove());
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Boot
+  // ---------------------------------------------------------------------------
+  $("#brand").textContent = S.name;
+  $("#drawerBrand").innerHTML = `${esc(S.name)}<small>${esc(S.tagline)}</small>`;
+  $("#drawerInfo").innerHTML = `
+    <p>📍 ${esc(S.shop.address)}</p>
+    <p>🕘 Open daily ${S.openHour}:00 – ${S.closeHour}:00</p>
+    <p>📞 <a href="tel:${esc(S.phone.replace(/\s/g, ""))}">${esc(S.phone)}</a></p>
+    <p>💬 <a href="https://wa.me/${esc(S.whatsappNumber)}" target="_blank" rel="noopener">Chat on WhatsApp</a></p>`;
+
+  window.addEventListener("hashchange", route);
+  saveCart();
+  route();
+})();
