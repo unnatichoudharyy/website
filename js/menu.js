@@ -128,12 +128,12 @@ window.MENU = [
     name: "Laddus (Per Kg)",
     subtitle: "Boxes of 4, 8, 12 or 24 laddus · a 1 kg box has about 24 laddus",
     items: [
-      { id: "besan-laddu", name: "Besan Laddu", desc: "Classic besan laddu.", price: 1500, unit: "kg", veg: true, emoji: "🟡", badge: "POPULAR", options: [LADDU_BOX] },
-      { id: "atta-laddu", name: "Atta Laddu", desc: "Whole-wheat atta laddu.", price: 1500, unit: "kg", veg: true, emoji: "🟤", options: [LADDU_BOX] },
-      { id: "nariyal-laddu", name: "Nariyal Laddu", desc: "Coconut laddu.", price: 1500, unit: "kg", veg: true, emoji: "🥥", options: [LADDU_BOX] },
-      { id: "moti-boondi-laddu", name: "Moti Boondi Laddu", desc: "Moti boondi laddu.", price: 1500, unit: "kg", veg: true, emoji: "🟠", options: [LADDU_BOX] },
+      { id: "besan-laddu", images: ["images/besan-laddu.webp"], name: "Besan Laddu", desc: "Classic besan laddu.", price: 1500, unit: "kg", veg: true, emoji: "🟡", badge: "POPULAR", options: [LADDU_BOX] },
+      { id: "atta-laddu", images: ["images/atta-laddu.webp"], name: "Atta Laddu", desc: "Whole-wheat atta laddu.", price: 1500, unit: "kg", veg: true, emoji: "🟤", options: [LADDU_BOX] },
+      { id: "nariyal-laddu", images: ["images/nariyal-laddu.webp"], name: "Nariyal Laddu", desc: "Coconut laddu.", price: 1500, unit: "kg", veg: true, emoji: "🥥", options: [LADDU_BOX] },
+      { id: "moti-boondi-laddu", images: ["images/moti-boondi-laddu.webp"], name: "Moti Boondi Laddu", desc: "Moti boondi laddu.", price: 1500, unit: "kg", veg: true, emoji: "🟠", options: [LADDU_BOX] },
       { id: "assorted-laddu-box", name: "Assorted Laddu Box", desc: "A mix of our laddus in one box.", price: 1600, unit: "kg", veg: true, emoji: "🎁", options: [LADDU_BOX] },
-      { id: "dry-fruit-laddu", name: "Dry Fruit Laddu", desc: "Dry fruit laddu.", price: 2500, unit: "kg", veg: true, emoji: "🌰", options: [LADDU_BOX] }
+      { id: "dry-fruit-laddu", images: ["images/dry-fruit-laddu.webp"], name: "Dry Fruit Laddu", desc: "Dry fruit laddu.", price: 2500, unit: "kg", veg: true, emoji: "🌰", options: [LADDU_BOX] }
     ]
   },
   {
