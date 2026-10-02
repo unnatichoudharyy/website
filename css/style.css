@@ -390,3 +390,4 @@ dialog.popup .muted-sm { color: var(--muted); font-size: .85rem; margin-bottom: 
 .stepper button:disabled { color: var(--line); cursor: not-allowed; }
 .item.sold .thumb { filter: grayscale(.85); }
 .item.sold .add { color: var(--danger); }
+.price .unit { font-weight: 400; color: var(--muted); font-size: .78em; margin-left: 3px; }

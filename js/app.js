@@ -99,7 +99,7 @@
     address: store.get("address", null),  // { text, lat, lng }
     customer: store.get("customer", {}),
     collapsed: {},
-    filters: { q: "", vrat: false, popular: false, under300: false },
+    filters: { q: "", vrat: false, popular: false, under500: false },
     showSearch: false,
     showFilters: false,
     menuScroll: 0
@@ -130,14 +130,33 @@
     return notes;
   }
 
+  // A choice can scale the base price (factor: 0.5 = half a kg) and/or add a
+  // fixed amount (price: +50 for gift wrap). Scaling keeps sizes right when
+  // you change the per-kg price in the Sheet.
   function unitPrice(item, sel) {
+    let factor = 1, extra = 0;
+    (item.options || []).forEach((g, gi) => (sel[gi] || []).forEach((ci) => {
+      const c = g.choices[ci];
+      if (!c) return;
+      if (typeof c.factor === "number") factor *= c.factor;
+      extra += c.price || 0;
+    }));
+    return Math.round(item.price * factor) + extra;
+  }
+  // Cheapest way to buy the item (smallest size), used by the price filter.
+  function minPrice(item) {
     let p = item.price;
-    (item.options || []).forEach((g, gi) => (sel[gi] || []).forEach((ci) => { p += g.choices[ci]?.price || 0; }));
+    (item.options || []).filter((g) => g.required).forEach((g) => {
+      p = Math.min(...g.choices.map((c) => Math.round(p * (typeof c.factor === "number" ? c.factor : 1)) + (c.price || 0)));
+    });
     return p;
   }
+  const priceNote = (item) => (item.unit ? `<small class="unit">/ ${esc(item.unit)}</small>` : "");
   function selLabel(item, sel) {
     const parts = [];
     (item.options || []).forEach((g, gi) => (sel[gi] || []).forEach((ci) => parts.push(g.choices[ci].label)));
+    // Per-kg items without a size choice: make "2 × Besan Halwa" read as 2 × 1 kg.
+    if (!parts.length && item.unit === "kg") parts.push("1 kg");
     return parts.join(", ");
   }
   const lineKey = (id, sel) => id + "|" + JSON.stringify(sel);
@@ -252,7 +271,7 @@
     }
     if (f.vrat && !(item.category === "navratri" || /vrat/i.test(item.badge || ""))) return false;
     if (f.popular && !/popular/i.test(item.badge || "")) return false;
-    if (f.under300 && item.price >= 300) return false;
+    if (f.under500 && minPrice(item) >= 500) return false;
     return true;
   }
 
@@ -276,7 +295,7 @@
         ${item.badge ? `<span class="tag ${badgeClass(item.badge)}">${esc(item.badge)}</span>` : ""}
         <div class="name-row"><h3>${esc(item.name)}</h3>${vegMark(item)}</div>
         <p class="desc">${esc(item.desc)}</p>
-        <div class="buy"><span class="price">${plain(item.price)}</span>${action}</div>
+        <div class="buy"><span class="price">${plain(item.price)}${priceNote(item)}</span>${action}</div>
       </div>
     </article>`;
   }
@@ -286,7 +305,7 @@
     const f = state.filters;
     const cats = CATALOG.map((cat) => ({ ...cat, list: cat.items.filter(matches) }))
       .filter((c) => c.list.length);
-    const filtering = f.q || f.vrat || f.popular || f.under300;
+    const filtering = f.q || f.vrat || f.popular || f.under500;
 
     view.innerHTML = `
       <div class="toolbar">
@@ -305,7 +324,7 @@
       <div class="filter-row" ${state.showFilters ? "" : "hidden"}>
         <button class="chip${f.vrat ? " on" : ""}" data-filter="vrat">🪔 Vrat friendly</button>
         <button class="chip${f.popular ? " on" : ""}" data-filter="popular">⭐ Popular</button>
-        <button class="chip${f.under300 ? " on" : ""}" data-filter="under300">Under ${S.currency}300</button>
+        <button class="chip${f.under500 ? " on" : ""}" data-filter="under500">Under ${S.currency}500</button>
       </div>
       ${S.banner && !filtering ? `<section class="banner">
         <h3>${esc(S.banner.title)}</h3><p>${esc(S.banner.text)}</p>
@@ -418,7 +437,7 @@
     const sec = document.getElementById("cat-" + catId);
     if (!sec) {
       // The category is hidden by filters — clear them and try again.
-      state.filters = { q: "", vrat: false, popular: false, under300: false };
+      state.filters = { q: "", vrat: false, popular: false, under500: false };
       renderMenu();
       return jumpTo(catId);
     }
@@ -461,7 +480,7 @@
         </div>
         <div class="detail">
           ${item.badge ? `<span class="tag ${badgeClass(item.badge)}">${esc(item.badge)}</span>` : ""}
-          <div class="detail-head">${vegMark(item)}<h1>${esc(item.name)}</h1><span class="price">${plain(item.price)}.00</span></div>
+          <div class="detail-head">${vegMark(item)}<h1>${esc(item.name)}</h1><span class="price">${plain(item.price)}.00${priceNote(item)}</span></div>
           <p class="desc-full">${esc(item.desc)}${lowStock(item) && !item.soldOut ? `<br><strong style="color:var(--danger)">Only ${item.stock} left!</strong>` : ""}${item.soldOut ? `<br><strong style="color:var(--danger)">${item.unavailable ? "Not available right now" : "Sold out"}</strong>` : ""}</p>
           <form id="optForm">
             ${groups.map((g, gi) => `
@@ -471,7 +490,9 @@
                   <label class="choice">
                     <input type="${(g.max || 1) === 1 && g.required ? "radio" : "checkbox"}" name="g${gi}" value="${ci}">
                     <span>${esc(c.label)}</span>
-                    <em>${c.price >= 0 ? "+" : "−"} ${plain(Math.abs(c.price))}.00</em>
+                    <em>${typeof c.factor === "number"
+                      ? `${S.currency}${plain(Math.round(item.price * c.factor) + (c.price || 0))}`
+                      : `${c.price >= 0 ? "+" : "−"} ${plain(Math.abs(c.price))}.00`}</em>
                   </label>`).join("")}
               </fieldset>`).join("")}
           </form>
@@ -605,7 +626,7 @@
         ${state.cart.map((l) => {
           const item = ITEMS[l.id];
           return `<div class="line">
-            <div><div class="nm">${vegMark(item).replace("veg-mark", "veg-mark inline")} ${esc(item.name)}</div>${l.sel.flat().length ? `<div class="opt">${esc(selLabel(item, l.sel))}</div>` : ""}</div>
+            <div><div class="nm">${vegMark(item).replace("veg-mark", "veg-mark inline")} ${esc(item.name)}</div>${selLabel(item, l.sel) ? `<div class="opt">${esc(selLabel(item, l.sel))}</div>` : ""}</div>
             <div class="stepper"><button data-key="${esc(l.key)}" data-d="-1" aria-label="Remove one">−</button><span>${l.qty}</span><button data-key="${esc(l.key)}" data-d="1" aria-label="Add one"${roomFor(l.id) > 0 ? "" : " disabled"}>+</button></div>
             <div class="amt">${money(unitPrice(item, l.sel) * l.qty)}</div>
           </div>`;
