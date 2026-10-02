@@ -7,7 +7,7 @@ You manage the menu and stock in a **Google Sheet** (see [backend/SETUP.md](back
 
 ## What customers can do
 
-1. **Menu**: browse collapsible categories. The **Menu** button jumps to a category. Customers can search and filter (vrat friendly, popular, under ₹300). Cards show "ONLY N LEFT!" when stock is low, and are greyed out as SOLD OUT or NOT AVAILABLE when they can't be ordered. Stock comes live from your Google Sheet.
+1. **Menu**: browse collapsible categories. The **Menu** button jumps to a category. Customers can search and filter (vrat friendly, popular, under ₹500). Cards show "ONLY N LEFT!" when stock is low, and are greyed out as SOLD OUT or NOT AVAILABLE when they can't be ordered. Stock comes live from your Google Sheet.
 2. **Item page**: pick a required option (weight, type, number of kanyas) and optional add-ons (gift wrap, card…) with live pricing. After adding, the button changes to **Go to cart**.
 3. **Your Order**: change quantities and see the bill (sub total, delivery charges, GST, to pay).
 4. **Delivery address**: search a place, move the map pin, or use current location. The map uses OpenStreetMap, so no API key is needed.
@@ -33,7 +33,7 @@ You manage the menu and stock in a **Google Sheet** (see [backend/SETUP.md](back
 Put photos in an `images/` folder and list them on the item in `js/menu.js`:
 
 ```js
-images: ["images/ghewar-1.jpg", "images/ghewar-2.jpg"],
+images: ["images/besan-laddu.webp", "images/besan-laddu-box.jpg"],
 ```
 
 The first photo shows on the menu card. The item page shows all of them with thumbnails.
