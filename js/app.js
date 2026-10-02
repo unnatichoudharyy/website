@@ -2,7 +2,6 @@
   "use strict";
 
   const S = window.STORE;
-  const MENU = window.MENU;
   const view = document.getElementById("view");
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -26,8 +25,51 @@
     }
   };
 
-  const ITEMS = {};
-  MENU.forEach((cat) => cat.items.forEach((it) => { ITEMS[it.id] = { ...it, category: cat.id }; }));
+  // ---------------------------------------------------------------------------
+  // Catalogue: js/menu.js, overlaid with live stock from the Google Sheet
+  // ---------------------------------------------------------------------------
+  let CATALOG = [];  // [{ id, name, subtitle, items: [...] }]
+  let ITEMS = {};    // id -> item
+  const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+  // Build the menu. Without a Sheet, it's js/menu.js as written. With one, the
+  // Sheet decides which items exist (in the Sheet's order) and their name,
+  // category, price and stock; js/menu.js still supplies options, emoji and
+  // any text the Sheet leaves blank.
+  function buildCatalog(inventory) {
+    const base = {};
+    window.MENU.forEach((c) => c.items.forEach((i) => { base[i.id] = { ...i, category: c.id }; }));
+
+    let cats;
+    if (!inventory) {
+      cats = window.MENU.map((c) => ({ ...c, items: c.items.map((i) => ({ ...base[i.id] })) }));
+    } else {
+      cats = window.MENU.map((c) => ({ id: c.id, name: c.name, subtitle: c.subtitle, items: [] }));
+      inventory.forEach((row) => {
+        const b = base[row.id] || {};
+        const catName = row.category || (cats.find((c) => c.id === b.category) || {}).name || "More";
+        let cat = cats.find((c) => c.name.toLowerCase() === catName.toLowerCase() || c.id === catName.toLowerCase());
+        if (!cat) { cat = { id: slug(catName) || "more", name: catName, items: [] }; cats.push(cat); }
+        cat.items.push({
+          ...b,
+          id: row.id,
+          name: row.name || b.name || row.id,
+          desc: row.description || b.desc || "",
+          price: typeof row.price === "number" ? row.price : (b.price || 0),
+          badge: row.badge || b.badge || "",
+          images: row.image ? [row.image] : b.images,
+          emoji: b.emoji || "🍬",
+          stock: typeof row.stock === "number" ? row.stock : null,
+          soldOut: row.available === false || row.stock === 0,
+          unavailable: row.available === false,
+          category: cat.id
+        });
+      });
+    }
+    CATALOG = cats.filter((c) => c.items.length);
+    ITEMS = {};
+    CATALOG.forEach((c) => c.items.forEach((i) => { ITEMS[i.id] = i; }));
+  }
 
   let toastTimer;
   function toast(msg) {
@@ -45,7 +87,9 @@
   }
   const vegMark = (item) => (item.veg === false ? "" : `<span class="veg-mark" title="Vegetarian"></span>`);
   const badgeClass = (b) => (/vrat/i.test(b) ? "vrat" : /new/i.test(b) ? "new" : "");
-  const lowStock = (item) => typeof item.stock === "number" && item.stock > 0 && item.stock <= 10;
+  const hasStockLimit = (item) => typeof item.stock === "number";
+  const lowStock = (item) => hasStockLimit(item) && item.stock > 0 && item.stock <= S.lowStockAt;
+  const soldOutLabel = (item) => (item.unavailable ? "NOT AVAILABLE" : "SOLD OUT");
 
   // ---------------------------------------------------------------------------
   // Cart state
@@ -60,8 +104,31 @@
     showFilters: false,
     menuScroll: 0
   };
-  // Drop cart lines whose item no longer exists in the menu.
-  state.cart = state.cart.filter((l) => ITEMS[l.id] && !ITEMS[l.id].soldOut);
+
+  // After the menu or stock changes: drop items that are gone or sold out and
+  // trim quantities to what's left. Returns messages for anything changed.
+  function reconcileCart() {
+    const notes = [];
+    const used = {};
+    state.cart = state.cart.filter((l) => {
+      const item = ITEMS[l.id];
+      if (!item || item.soldOut) {
+        notes.push(`${item ? item.name : "An item"} is no longer available and was removed from your cart.`);
+        return false;
+      }
+      if (hasStockLimit(item)) {
+        const left = item.stock - (used[l.id] || 0);
+        if (l.qty > left) {
+          notes.push(`Only ${item.stock} ${item.name} left, so we updated your cart.`);
+          l.qty = left;
+        }
+      }
+      used[l.id] = (used[l.id] || 0) + l.qty;
+      return l.qty > 0;
+    });
+    saveCart();
+    return notes;
+  }
 
   function unitPrice(item, sel) {
     let p = item.price;
@@ -89,7 +156,17 @@
     btn.classList.add("bump");
   }
 
+  // How many more of this item can go in the cart (Infinity when untracked).
+  function roomFor(id) {
+    const item = ITEMS[id];
+    if (!item || item.soldOut) return 0;
+    return hasStockLimit(item) ? Math.max(0, item.stock - qtyOfItem(id)) : Infinity;
+  }
+
   function addToCart(id, sel, qty = 1) {
+    const room = roomFor(id);
+    if (room <= 0) { toast(`Sorry, no more ${ITEMS[id] ? ITEMS[id].name : "of this item"} left`); return null; }
+    if (qty > room) { toast(`Only ${ITEMS[id].stock} left in stock`); qty = room; }
     const key = lineKey(id, sel);
     const line = state.cart.find((l) => l.key === key);
     if (line) line.qty += qty;
@@ -102,15 +179,18 @@
     const line = state.cart.find((l) => l.key === key);
     if (!line) return;
     const item = ITEMS[line.id];
-    if (typeof item.stock === "number" && qty > item.stock) {
-      toast(`Only ${item.stock} left in stock`);
-      qty = item.stock;
+    const max = line.qty + roomFor(line.id);
+    if (qty > max) {
+      toast(hasStockLimit(item) ? `Only ${item.stock} left in stock` : "Sorry, this item is sold out");
+      qty = max;
     }
     line.qty = qty;
     if (line.qty <= 0) state.cart = state.cart.filter((l) => l.key !== key);
     saveCart();
   }
-  const qtyOfItem = (id) => state.cart.filter((l) => l.id === id).reduce((a, l) => a + l.qty, 0);
+  function qtyOfItem(id) {
+    return state.cart.filter((l) => l.id === id).reduce((a, l) => a + l.qty, 0);
+  }
 
   function totals() {
     const sub = state.cart.reduce((a, l) => a + unitPrice(ITEMS[l.id], l.sel) * l.qty, 0);
@@ -140,6 +220,7 @@
     view.onclick = null;
     view.onkeydown = null;
 
+    if (!catalogReady && page !== "order") return renderLoading();
     if (page === "item" && ITEMS[arg]) renderItem(ITEMS[arg]);
     else if (page === "cart") renderCart();
     else if (page === "checkout") renderCheckout();
@@ -179,10 +260,10 @@
     const q = qtyOfItem(item.id);
     const hasOpts = item.options && item.options.length;
     let action;
-    if (item.soldOut) action = `<button class="add" disabled>SOLD OUT</button>`;
+    if (item.soldOut) action = `<button class="add" disabled>${soldOutLabel(item)}</button>`;
     else if (!hasOpts && q > 0) {
       action = `<div class="stepper" data-stop>
-        <button data-dec="${item.id}" aria-label="Remove one">−</button><span>${q}</span><button data-inc="${item.id}" aria-label="Add one">+</button>
+        <button data-dec="${item.id}" aria-label="Remove one">−</button><span>${q}</span><button data-inc="${item.id}" aria-label="Add one"${roomFor(item.id) > 0 ? "" : " disabled"}>+</button>
       </div>`;
     } else action = `<button class="add" data-add="${item.id}">${hasOpts ? "ADD+" : "ADD"}${hasOpts && q ? ` (${q})` : ""}</button>`;
 
@@ -203,7 +284,7 @@
   function renderMenu() {
     document.title = `${S.name} · Order Mithai Online`;
     const f = state.filters;
-    const cats = MENU.map((cat) => ({ ...cat, list: cat.items.map((i) => ITEMS[i.id]).filter(matches) }))
+    const cats = CATALOG.map((cat) => ({ ...cat, list: cat.items.filter(matches) }))
       .filter((c) => c.list.length);
     const filtering = f.q || f.vrat || f.popular || f.under300;
 
@@ -303,7 +384,7 @@
       } else if (d.add) {
         const item = ITEMS[d.add];
         if (item.options && item.options.length) openItem(item.id);
-        else { addToCart(item.id, []); toast(`${item.name} added`); refreshMenuCards(item.id); }
+        else { if (addToCart(item.id, [])) toast(`${item.name} added`); refreshMenuCards(item.id); }
       } else if (d.inc || d.dec) {
         const id = d.inc || d.dec;
         const key = lineKey(id, []);
@@ -351,7 +432,7 @@
     const pop = document.createElement("div");
     pop.className = "cat-pop";
     pop.setAttribute("role", "menu");
-    pop.innerHTML = MENU.map((c) => `<button role="menuitem" data-cat="${c.id}"><span>${esc(c.name)}</span><span>${c.items.length}</span></button>`).join("");
+    pop.innerHTML = CATALOG.map((c) => `<button role="menuitem" data-cat="${c.id}"><span>${esc(c.name)}</span><span>${c.items.length}</span></button>`).join("");
     const close = () => { scrim.remove(); pop.remove(); };
     scrim.onclick = close;
     pop.onclick = (e) => { const b = e.target.closest("[data-cat]"); if (b) { close(); jumpTo(b.dataset.cat); } };
@@ -381,7 +462,7 @@
         <div class="detail">
           ${item.badge ? `<span class="tag ${badgeClass(item.badge)}">${esc(item.badge)}</span>` : ""}
           <div class="detail-head">${vegMark(item)}<h1>${esc(item.name)}</h1><span class="price">${plain(item.price)}.00</span></div>
-          <p class="desc-full">${esc(item.desc)}${lowStock(item) ? `<br><strong style="color:var(--danger)">Only ${item.stock} left!</strong>` : ""}</p>
+          <p class="desc-full">${esc(item.desc)}${lowStock(item) && !item.soldOut ? `<br><strong style="color:var(--danger)">Only ${item.stock} left!</strong>` : ""}${item.soldOut ? `<br><strong style="color:var(--danger)">${item.unavailable ? "Not available right now" : "Sold out"}</strong>` : ""}</p>
           <form id="optForm">
             ${groups.map((g, gi) => `
               <fieldset class="group" data-group="${gi}">
@@ -402,14 +483,18 @@
 
     function drawFoot() {
       if (item.soldOut) {
-        foot.innerHTML = `<button class="btn primary" disabled>Sold out</button>`;
+        foot.innerHTML = `<button class="btn primary" disabled>${item.unavailable ? "Not available right now" : "Sold out"}</button>`;
+        return;
+      }
+      if (!addedKey && roomFor(item.id) <= 0) {
+        foot.innerHTML = `<button class="btn ghost" disabled>All ${item.stock} left are in your cart</button><a class="btn primary" href="#/cart">🛒 Go to cart</a>`;
         return;
       }
       if (addedKey) {
         const line = state.cart.find((l) => l.key === addedKey);
         const q = line ? line.qty : 0;
         foot.innerHTML = `
-          <div class="stepper lg"><button data-q="-1" aria-label="Remove one">−</button><span>${q}</span><button data-q="1" aria-label="Add one">+</button></div>
+          <div class="stepper lg"><button data-q="-1" aria-label="Remove one">−</button><span>${q}</span><button data-q="1" aria-label="Add one"${roomFor(item.id) > 0 ? "" : " disabled"}>+</button></div>
           <a class="btn primary" href="#/cart">🛒 Go to cart</a>`;
         return;
       }
@@ -429,7 +514,8 @@
           if (!state.cart.find((l) => l.key === addedKey)) { addedKey = null; qty = 1; }
         } else {
           qty = Math.max(1, qty + d);
-          if (typeof item.stock === "number" && qty > item.stock) { qty = item.stock; toast(`Only ${item.stock} left in stock`); }
+          const room = roomFor(item.id);
+          if (qty > room) { qty = Math.max(1, room); toast(`Only ${item.stock} left in stock`); }
         }
         drawFoot();
         return;
@@ -445,7 +531,7 @@
           return;
         }
         addedKey = addToCart(item.id, sel.map((s) => [...s].sort((a, b) => a - b)), qty);
-        toast(`${item.name} added to cart`);
+        if (addedKey) toast(`${item.name} added to cart`);
         drawFoot();
       }
     };
@@ -499,8 +585,11 @@
 
   function renderCart() {
     document.title = `Your Order · ${S.name}`;
+    // A one-time message, e.g. "some items just ran out".
+    const notice = state.cartNotice ? `<p class="notice" role="alert">${esc(state.cartNotice)}</p>` : "";
+    state.cartNotice = "";
     if (!state.cart.length) {
-      view.innerHTML = `<div class="page"><h1>Your Order</h1>
+      view.innerHTML = `<div class="page"><h1>Your Order</h1>${notice}
         <p class="empty">🪔<br><br>Your cart is empty.<br>Add some mithai to get started.</p>
         <a class="btn primary block" href="#/">Browse menu</a></div>`;
       return;
@@ -512,11 +601,12 @@
       <div class="page">
         <h1>Your Order</h1>
         <p class="sub">Pre-order from ${esc(S.name)} · home delivery in ${esc(S.city)}</p>
+        ${notice}
         ${state.cart.map((l) => {
           const item = ITEMS[l.id];
           return `<div class="line">
             <div><div class="nm">${vegMark(item).replace("veg-mark", "veg-mark inline")} ${esc(item.name)}</div>${l.sel.flat().length ? `<div class="opt">${esc(selLabel(item, l.sel))}</div>` : ""}</div>
-            <div class="stepper"><button data-key="${esc(l.key)}" data-d="-1" aria-label="Remove one">−</button><span>${l.qty}</span><button data-key="${esc(l.key)}" data-d="1" aria-label="Add one">+</button></div>
+            <div class="stepper"><button data-key="${esc(l.key)}" data-d="-1" aria-label="Remove one">−</button><span>${l.qty}</span><button data-key="${esc(l.key)}" data-d="1" aria-label="Add one"${roomFor(l.id) > 0 ? "" : " disabled"}>+</button></div>
             <div class="amt">${money(unitPrice(item, l.sel) * l.qty)}</div>
           </div>`;
         }).join("")}
@@ -694,38 +784,74 @@
     };
   }
 
-  function placeOrder({ slot, notes, payment }) {
+  // Send the order to the Sheet, which checks and reduces the stock.
+  // Resolves to { ok: true } or { ok: false, problems?, items? }.
+  async function sendToBackend(order) {
+    const r = await fetch(S.backendUrl, { method: "POST", body: JSON.stringify(order) });
+    return r.json();
+  }
+
+  async function placeOrder({ slot, notes, payment }) {
     const t = totals();
-    const now = new Date();
-    const id = "MK" + now.toISOString().slice(2, 10).replace(/-/g, "") + Math.floor(1000 + Math.random() * 9000);
+    // One ID per checkout visit, so a retry after a network hiccup can't
+    // create (and charge stock for) the same order twice.
+    if (!state.pendingOrderId) {
+      const now = new Date();
+      state.pendingOrderId = "MK" + now.toISOString().slice(2, 10).replace(/-/g, "") + Math.floor(1000 + Math.random() * 9000);
+    }
+    const id = state.pendingOrderId;
     const c = state.customer;
     const order = {
       id,
-      placedAt: now.toISOString(),
+      placedAt: new Date().toISOString(),
       slot,
       payment,
       customer: { name: c.name, email: c.email, phone: "+91" + c.phone },
       address: { line: c.house, landmark: c.landmark, map: state.address.text, lat: state.address.lat, lng: state.address.lng },
       items: state.cart.map((l) => {
         const item = ITEMS[l.id];
-        return { name: item.name, options: selLabel(item, l.sel), qty: l.qty, price: unitPrice(item, l.sel) * l.qty };
+        return { id: item.id, name: item.name, options: selLabel(item, l.sel), qty: l.qty, price: unitPrice(item, l.sel) * l.qty };
       }),
       notes,
       totals: { sub: t.sub, delivery: t.delivery, tax: t.tax, total: t.total }
     };
 
+    if (S.backendUrl) {
+      const btn = $("#payNow");
+      btn.disabled = true;
+      btn.textContent = "Placing your order…";
+      let res;
+      try {
+        res = await sendToBackend(order);
+      } catch {
+        res = null;
+      }
+      if (!res) {
+        btn.disabled = false;
+        btn.textContent = S.upiId ? "Pay Now" : "Place Pre-order";
+        toast("Couldn't reach our kitchen. Please check your internet and try again.");
+        return;
+      }
+      if (!res.ok) {
+        if (Array.isArray(res.items)) applyInventory(res.items);
+        const names = (res.problems || []).map((p) => (p.left > 0 ? `${p.name} (only ${p.left} left)` : `${p.name} (sold out)`));
+        state.cartNotice = names.length
+          ? `Sorry, some items just ran out: ${names.join(", ")}. We've updated your cart. Please check it and place the order again.`
+          : "Sorry, we couldn't place your order. Please try again.";
+        go("#/cart");
+        return;
+      }
+    }
+
     const orders = store.get("orders", {});
     orders[id] = order;
     store.set("orders", orders);
 
-    if (S.orderWebhook) {
-      fetch(S.orderWebhook, {
-        method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(order)
-      }).catch(() => {});
-    }
-
+    // Our own order used up stock: show the new numbers straight away.
     state.cart = [];
+    state.pendingOrderId = null;
     saveCart();
+    if (S.backendUrl) refreshInventory();
     go("#/order/" + id);
   }
 
@@ -936,6 +1062,68 @@
   });
 
   // ---------------------------------------------------------------------------
+  // Live inventory from the Google Sheet
+  // ---------------------------------------------------------------------------
+  let catalogReady = false;
+  let inventoryFailed = false;
+
+  function applyInventory(items) {
+    buildCatalog(items);
+    catalogReady = true;
+    store.set("inventory", items);
+    const notes = reconcileCart();
+    if (notes.length) state.cartNotice = notes.join(" ");
+    return notes;
+  }
+
+  let refreshing = null;
+  function refreshInventory() {
+    if (!S.backendUrl) return Promise.resolve();
+    if (refreshing) return refreshing;
+    refreshing = (async () => {
+      const page = location.hash.replace(/^#\/?/, "").split("/");
+      const before = JSON.stringify(store.get("inventory", null));
+      const itemBefore = page[0] === "item" ? JSON.stringify(ITEMS[page[1]] || null) : "";
+      const wasReady = catalogReady;
+      try {
+        const r = await fetch(S.backendUrl + (S.backendUrl.includes("?") ? "&" : "?") + "t=" + Date.now());
+        const j = await r.json();
+        if (!j.ok || !Array.isArray(j.items)) throw new Error("bad inventory");
+        inventoryFailed = false;
+        if (JSON.stringify(j.items) === before && wasReady) return;
+        const notes = applyInventory(j.items);
+        rerenderAfterStockChange(page, itemBefore, wasReady, notes);
+      } catch {
+        inventoryFailed = true;
+        if (!catalogReady) route(); // show the "couldn't load" message
+      } finally {
+        refreshing = null;
+      }
+    })();
+    return refreshing;
+  }
+
+  // Redraw whatever the customer is looking at, without losing their place.
+  function rerenderAfterStockChange(page, itemBefore, wasReady, notes) {
+    const [name, arg] = page;
+    if (!wasReady) return route();
+    if (!name) { state.menuScroll = window.scrollY; route(); }
+    else if (name === "item") { if (JSON.stringify(ITEMS[arg] || null) !== itemBefore) route(); }
+    else if (name === "cart") route();
+    else if (name === "checkout" && notes.length) go("#/cart");
+    if (notes.length && name !== "cart" && name !== "checkout") toast(notes[0]);
+  }
+
+  function renderLoading() {
+    view.innerHTML = inventoryFailed
+      ? `<div class="page"><p class="empty">😕<br><br>We couldn't load today's menu.<br>Please check your internet connection.</p>
+          <button class="btn primary block" id="retryMenu">Try again</button></div>`
+      : `<div class="page"><p class="empty"><span class="spinner" aria-hidden="true"></span><br>Loading today's menu…</p></div>`;
+    const retry = $("#retryMenu");
+    if (retry) retry.onclick = () => { inventoryFailed = false; renderLoading(); refreshInventory(); };
+  }
+
+  // ---------------------------------------------------------------------------
   // Drawer
   // ---------------------------------------------------------------------------
   const drawer = $("#drawer");
@@ -965,5 +1153,23 @@
 
   window.addEventListener("hashchange", route);
   saveCart();
-  route();
+
+  if (!S.backendUrl) {
+    buildCatalog(null);
+    catalogReady = true;
+    reconcileCart();
+    route();
+  } else {
+    // Show the last stock we saw straight away, then fetch the latest.
+    const cached = store.get("inventory", null);
+    if (Array.isArray(cached)) {
+      buildCatalog(cached);
+      catalogReady = true;
+      reconcileCart();
+    }
+    route();
+    refreshInventory();
+    setInterval(() => { if (!document.hidden) refreshInventory(); }, S.refreshSeconds * 1000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshInventory(); });
+  }
 })();

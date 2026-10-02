@@ -3,10 +3,11 @@
 A mobile-first **pre-order** website for Marwadi Khana (mithai, Navratri specials and combos).
 It is home delivery only, across Delhi NCR and Gurgaon.
 It uses plain HTML, CSS and JavaScript, with no build step and no server.
+You manage the menu and stock in a **Google Sheet** (see [backend/SETUP.md](backend/SETUP.md)).
 
 ## What customers can do
 
-1. **Menu**: browse collapsible categories. The **Menu** button jumps to a category. Customers can search and filter (vrat friendly, popular, under ₹300). Cards can show "ONLY N LEFT!", POPULAR or VRAT FRIENDLY badges.
+1. **Menu**: browse collapsible categories. The **Menu** button jumps to a category. Customers can search and filter (vrat friendly, popular, under ₹300). Cards show "ONLY N LEFT!" when stock is low, and are greyed out as SOLD OUT or NOT AVAILABLE when they can't be ordered. Stock comes live from your Google Sheet.
 2. **Item page**: pick a required option (weight, type, number of kanyas) and optional add-ons (gift wrap, card…) with live pricing. After adding, the button changes to **Go to cart**.
 3. **Your Order**: change quantities and see the bill (sub total, delivery charges, GST, to pay).
 4. **Delivery address**: search a place, move the map pin, or use current location. The map uses OpenStreetMap, so no API key is needed.
@@ -23,7 +24,9 @@ It uses plain HTML, CSS and JavaScript, with no build step and no server.
 | Areas you deliver to (`deliveryAreas`) | `js/config.js` |
 | The Navratri banner | `js/config.js` |
 | Earliest and latest pre-order day, 6 PM order cut-off, slot timings (from 10 AM) | `js/config.js` |
-| Categories, items, prices, weights, add-ons, stock, sold out | `js/menu.js` |
+| Which items are on sale, names, prices, categories, **stock**, available on/off | your Google Sheet ([backend/SETUP.md](backend/SETUP.md)) |
+| Sizes/weights, add-ons, emoji for each item | `js/menu.js` |
+| Google Sheet link (`backendUrl`) and the low-stock number (`lowStockAt`) | `js/config.js` |
 | Colours (maroon theme) and fonts | top of `css/style.css` |
 
 ### Adding photos
@@ -36,9 +39,13 @@ images: ["images/ghewar-1.jpg", "images/ghewar-2.jpg"],
 The first photo shows on the menu card. The item page shows all of them with thumbnails.
 Items without photos show their emoji on a coloured tile.
 
-### Getting orders into a Google Sheet (optional)
-Set `orderWebhook` in `js/config.js` to the URL of a Google Apps Script web app (or any URL that accepts a POST).
-Every order is sent to it as JSON, as well as the WhatsApp confirmation.
+### Inventory and orders in a Google Sheet
+Follow [backend/SETUP.md](backend/SETUP.md) once (about 10 minutes). After that:
+- **Shop window:** the Sheet's **Inventory** tab decides what's on sale.
+- **Stock goes down automatically** with every order.
+- **Order log:** each order is added to the **Orders** tab.
+
+Until `backendUrl` is set, the site uses the items in `js/menu.js` as-is.
 
 ## Run it locally
 
@@ -60,7 +67,6 @@ To deliver only to Delhi and Gurgaon, remove the Noida, Ghaziabad and Faridabad 
 ## Things to know
 - **Payments**: UPI links go straight to your UPI ID, so check the payment against the order ID.
   To take card/UPI payments automatically you would need a gateway such as Razorpay or Cashfree, plus a small server.
-- **Order records**: orders reach you through WhatsApp (and the webhook if you set one up).
-  The site has no admin panel or database.
+- **Order records**: orders reach you on WhatsApp. Once the Sheet is connected, they also go into its Orders tab.
 - **Address search** uses OpenStreetMap's free Nominatim service. That's fine for a small shop.
   If you get a lot of traffic, switch to a paid geocoding provider.

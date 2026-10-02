@@ -57,7 +57,11 @@ window.STORE = {
     lng: 77.2090
   },
 
-  // Optional: URL that receives every order as JSON (POST), e.g. a Google
-  // Apps Script web app that appends rows to a Google Sheet. Leave "" to skip.
-  orderWebhook: ""
+  // Inventory backend: the Google Sheet web-app URL from backend/SETUP.md
+  // (looks like https://script.google.com/macros/s/AKfy.../exec).
+  // When set, the site shows the items, prices and stock from your Sheet and
+  // every order reduces the stock there. Leave "" to use js/menu.js only.
+  backendUrl: "",
+  lowStockAt: 10,           // show "ONLY N LEFT!" when stock is this or lower
+  refreshSeconds: 60        // how often an open page re-checks the stock
 };

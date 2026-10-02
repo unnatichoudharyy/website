@@ -376,3 +376,17 @@ dialog.popup h2 { margin: 0 0 6px; font-size: 1.25rem; color: var(--primary); }
 dialog.popup p { margin: 0 0 8px; line-height: 1.5; }
 dialog.popup .muted-sm { color: var(--muted); font-size: .85rem; margin-bottom: 18px; }
 .field .hint { margin: -2px 0 8px; font-size: .78rem; color: var(--muted); line-height: 1.45; }
+
+/* ---------- Live stock ---------- */
+.notice {
+  background: #fdeef0; color: var(--maroon); border-left: 4px solid var(--maroon);
+  padding: 10px 12px; border-radius: 6px; font-size: .86rem; line-height: 1.5; margin: 0 0 14px;
+}
+.spinner {
+  display: inline-block; width: 28px; height: 28px; margin-bottom: 8px; border-radius: 50%;
+  border: 3px solid var(--line); border-top-color: var(--primary); animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.stepper button:disabled { color: var(--line); cursor: not-allowed; }
+.item.sold .thumb { filter: grayscale(.85); }
+.item.sold .add { color: var(--danger); }
