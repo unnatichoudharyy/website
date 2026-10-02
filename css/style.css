@@ -9,6 +9,7 @@
   --ink: #2b1d16;
   --muted: #7b6a5f;
   --line: #e6dccf;
+  --photo-bg: #edece8;
   --veg: #1f9d55;
   --danger: #c62828;
   --radius: 12px;
@@ -134,7 +135,9 @@ main { max-width: var(--max); margin: 0 auto; min-height: calc(100vh - 56px); ou
 }
 .item.sold { opacity: .6; }
 .thumb { position: relative; background: #fff; display: grid; place-items: center; overflow: hidden; }
-.thumb img { width: 100%; height: 100%; object-fit: cover; }
+/* Show the whole photo (no cropping), on a backdrop matching the photo studio background. */
+.thumb:has(img) { background: var(--photo-bg); }
+.thumb img { width: 100%; height: 100%; object-fit: contain; padding: 6px; }
 .emoji-tile {
   width: 100%; height: 100%; display: grid; place-items: center; font-size: 3.2rem;
   background: radial-gradient(circle at 30% 30%, #fff7ea, #f6dfbf);
@@ -180,7 +183,8 @@ main { max-width: var(--max); margin: 0 auto; min-height: calc(100vh - 56px); ou
 /* ---------- Item page ---------- */
 .gallery-main { aspect-ratio: 1 / 1; max-height: 60vh; width: 100%; background: #fff; }
 .gallery-main .emoji-tile { font-size: 8rem; }
-.gallery-main img { width: 100%; height: 100%; object-fit: cover; }
+.gallery-main:has(img) { background: var(--photo-bg); }
+.gallery-main img { width: 100%; height: 100%; object-fit: contain; padding: 12px; }
 .thumbs { display: flex; gap: 10px; padding: 14px 16px 0; }
 .thumbs button {
   width: 64px; height: 64px; border-radius: 10px; border: 2px solid transparent; padding: 0; overflow: hidden; background: var(--card);
