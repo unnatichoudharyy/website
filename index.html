@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Marwadi Khana · Order Mithai Online</title>
-  <meta name="description" content="Order fresh Marwadi mithai, Navratri vrat specials and festive combos for delivery or pickup.">
-  <meta name="theme-color" content="#5a2a17">
+  <title>Marwadi Khana · Pre-order Mithai Online</title>
+  <meta name="description" content="Pre-order fresh Marwadi mithai, Navratri vrat specials and festive combos for home delivery across Delhi NCR and Gurgaon.">
+  <meta name="theme-color" content="#7b1626">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪔</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -65,6 +65,15 @@
       <p class="picked" id="addrPicked"></p>
       <button class="btn primary block" id="addrContinue" disabled>Continue</button>
     </div>
+  </dialog>
+
+  <!-- Outside delivery area -->
+  <dialog id="areaDialog" class="modal popup" aria-labelledby="areaTitle">
+    <div class="popup-icon" aria-hidden="true">📍</div>
+    <h2 id="areaTitle">Sorry!</h2>
+    <p>Sorry, we are not currently delivering near your location.</p>
+    <p class="muted-sm">We deliver across Delhi NCR and Gurgaon. Please choose another address.</p>
+    <button class="btn primary block" data-close autofocus>Choose another address</button>
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

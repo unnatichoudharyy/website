@@ -17,7 +17,9 @@
 //   options   optional list of option groups:
 //             { name, required, max, choices: [{ label, price }] }
 //             required: customer must pick one; max: how many can be picked
-//             price on a choice is added to the base price
+//             price on a choice is added to the base price;
+//             factor on a choice scales it (e.g. factor: 0.5 for half a kg)
+//   unit      optional, shown after the price: "kg" → "1,500 / kg"
 // ---------------------------------------------------------------------------
 
 const WEIGHT = (half, kg) => ({
@@ -27,6 +29,17 @@ const WEIGHT = (half, kg) => ({
     { label: "1 kg", price: kg }
   ]
 });
+
+// Laddus are priced per kg; a 1 kg box holds about 24, so each box is priced
+// by its share of a kg (box of 4 = 4/24 of the per-kg price).
+const LADDU_BOX = {
+  name: "Select box", required: true, max: 1, choices: [
+    { label: "Box of 4 laddus (≈ 170 g)", factor: 4 / 24 },
+    { label: "Box of 8 laddus (≈ 330 g)", factor: 8 / 24 },
+    { label: "Box of 12 laddus (≈ 500 g)", factor: 12 / 24 },
+    { label: "Box of 24 laddus (≈ 1 kg)", factor: 1 }
+  ]
+};
 
 const GIFTING = {
   name: "Add-ons", required: false, max: 3, choices: [
@@ -90,126 +103,47 @@ window.MENU = [
     ]
   },
   {
-    id: "mithai",
-    name: "Classic Marwadi Mithai",
-    subtitle: "Made fresh every morning in pure desi ghee",
+    id: "halwa",
+    name: "Halwa (Per Kg)",
     items: [
-      {
-        id: "ghewar",
-        name: "Malai Ghewar",
-        desc: "Jaipur-style honeycomb ghewar soaked in chashni and topped with rabdi, kesar and pista. One 8-inch piece.",
-        price: 549, veg: true, emoji: "🌕", badge: "POPULAR", stock: 6,
-        options: [
-          { name: "Select type", required: true, max: 1, choices: [
-            { label: "Malai ghewar", price: 0 },
-            { label: "Plain ghewar", price: -150 },
-            { label: "Mawa ghewar", price: 80 }
-          ] },
-          GIFTING
-        ]
-      },
-      {
-        id: "mohanthal",
-        name: "Mohanthal",
-        desc: "Coarse besan roasted in ghee for hours, set with mawa and topped with almond slivers.",
-        price: 240, veg: true, emoji: "🟧",
-        options: [WEIGHT(220, 680), GIFTING]
-      },
-      {
-        id: "mawa-kachori",
-        name: "Mawa Kachori (4 pcs)",
-        desc: "Jodhpur's famous flaky kachori stuffed with mawa and dry fruits, dipped in chashni.",
-        price: 260, veg: true, emoji: "🥮", badge: "POPULAR"
-      },
-      {
-        id: "balushahi",
-        name: "Balushahi",
-        desc: "Flaky, layered and glazed. Melts in the mouth.",
-        price: 180, veg: true, emoji: "🍩",
-        options: [WEIGHT(160, 500)]
-      },
-      {
-        id: "alwar-kalakand",
-        name: "Alwar ka Kalakand",
-        desc: "Grainy milk cake cooked down from fresh milk, just like in Alwar.",
-        price: 260, veg: true, emoji: "🧀",
-        options: [WEIGHT(240, 740), GIFTING]
-      },
-      {
-        id: "sohan-halwa",
-        name: "Ajmer ka Sohan Halwa",
-        desc: "Dense, chewy halwa loaded with ghee, almonds and pistachios.",
-        price: 280, veg: true, emoji: "🟤",
-        options: [WEIGHT(260, 800), GIFTING]
-      }
+      { id: "besan-halwa", name: "Besan Halwa", desc: "Classic besan halwa. Priced per kg.", price: 1500, unit: "kg", veg: true, emoji: "🟨" },
+      { id: "moong-dal-halwa", name: "Moong Dal Halwa", desc: "Traditional moong dal halwa. Priced per kg.", price: 1500, unit: "kg", veg: true, emoji: "🟧", badge: "POPULAR" },
+      { id: "badam-halwa", name: "Badam Halwa", desc: "Rich almond halwa. Priced per kg.", price: 2500, unit: "kg", veg: true, emoji: "🌰" },
+      { id: "walnut-halwa", name: "Walnut Halwa", desc: "Walnut halwa. Priced per kg.", price: 3000, unit: "kg", veg: true, emoji: "🟤" }
     ]
   },
   {
-    id: "barfi",
-    name: "Barfi & Katli",
+    id: "halwa-jars",
+    name: "Halwa Jars (300 g)",
+    subtitle: "Our halwas in a 300 g jar, easy to gift",
     items: [
-      {
-        id: "kaju-katli",
-        name: "Kaju Katli",
-        desc: "Premium cashew katli with a delicate silver varq.",
-        price: 320, veg: true, emoji: "🔷", badge: "POPULAR",
-        options: [WEIGHT(300, 940), GIFTING]
-      },
-      {
-        id: "pista-barfi",
-        name: "Pista Barfi",
-        desc: "Rich pistachio and mawa barfi with a hint of cardamom.",
-        price: 380, veg: true, emoji: "🟩",
-        options: [WEIGHT(360, 1100), GIFTING]
-      },
-      {
-        id: "besan-chakki",
-        name: "Besan Chakki",
-        desc: "Traditional Marwadi besan barfi with a melt-in-the-mouth crumb.",
-        price: 200, veg: true, emoji: "🟨",
-        options: [WEIGHT(180, 560)]
-      },
-      {
-        id: "doodh-barfi",
-        name: "Doodh Barfi",
-        desc: "Simple, milky and not too sweet.",
-        price: 220, veg: true, emoji: "⬜",
-        options: [WEIGHT(200, 620)]
-      }
+      { id: "besan-halwa-jar", name: "Besan Halwa Jar (300 g)", desc: "Besan halwa in a 300 g jar.", price: 425, unit: "jar", veg: true, emoji: "🫙" },
+      { id: "moong-dal-halwa-jar", name: "Moong Dal Halwa Jar (300 g)", desc: "Moong dal halwa in a 300 g jar.", price: 425, unit: "jar", veg: true, emoji: "🫙" },
+      { id: "badam-halwa-jar", name: "Badam Halwa Jar (300 g)", desc: "Badam halwa in a 300 g jar.", price: 675, unit: "jar", veg: true, emoji: "🫙" },
+      { id: "walnut-halwa-jar", name: "Walnut Halwa Jar (300 g)", desc: "Walnut halwa in a 300 g jar.", price: 800, unit: "jar", veg: true, emoji: "🫙" }
     ]
   },
   {
-    id: "laddoo",
-    name: "Laddoo",
+    id: "laddus",
+    name: "Laddus (Per Kg)",
+    subtitle: "Boxes of 4, 8, 12 or 24 laddus · a 1 kg box has about 24 laddus",
     items: [
-      {
-        id: "churma-laddoo",
-        name: "Churma Laddoo",
-        desc: "Coarse wheat churma with jaggery, ghee and khus-khus. The Rajasthani classic.",
-        price: 200, veg: true, emoji: "🟠", badge: "POPULAR",
-        options: [WEIGHT(180, 560)]
-      },
-      {
-        id: "motichoor-laddoo",
-        name: "Desi Ghee Motichoor Laddoo",
-        desc: "Tiny boondi pearls in kesar chashni.",
-        price: 190, veg: true, emoji: "🟠",
-        options: [WEIGHT(170, 540)]
-      },
-      {
-        id: "gond-laddoo",
-        name: "Gond ke Laddoo",
-        desc: "Edible gum, dry fruits and whole wheat in ghee. A winter favourite.",
-        price: 260, veg: true, emoji: "🟤",
-        options: [WEIGHT(240, 740)]
-      },
-      {
-        id: "dryfruit-laddoo",
-        name: "Sugar-free Dry Fruit Laddoo",
-        desc: "Dates, figs, almonds and cashews. No added sugar.",
-        price: 340, veg: true, emoji: "🌰", badge: "NEW",
-        options: [WEIGHT(320, 980)]
-      }
+      { id: "besan-laddu", name: "Besan Laddu", desc: "Classic besan laddu.", price: 1500, unit: "kg", veg: true, emoji: "🟡", badge: "POPULAR", options: [LADDU_BOX] },
+      { id: "atta-laddu", name: "Atta Laddu", desc: "Whole-wheat atta laddu.", price: 1500, unit: "kg", veg: true, emoji: "🟤", options: [LADDU_BOX] },
+      { id: "nariyal-laddu", name: "Nariyal Laddu", desc: "Coconut laddu.", price: 1500, unit: "kg", veg: true, emoji: "🥥", options: [LADDU_BOX] },
+      { id: "moti-boondi-laddu", name: "Moti Boondi Laddu", desc: "Moti boondi laddu.", price: 1500, unit: "kg", veg: true, emoji: "🟠", options: [LADDU_BOX] },
+      { id: "assorted-laddu-box", name: "Assorted Laddu Box", desc: "A mix of our laddus in one box.", price: 1600, unit: "kg", veg: true, emoji: "🎁", options: [LADDU_BOX] },
+      { id: "dry-fruit-laddu", name: "Dry Fruit Laddu", desc: "Dry fruit laddu.", price: 2500, unit: "kg", veg: true, emoji: "🌰", options: [LADDU_BOX] }
+    ]
+  },
+  {
+    id: "burfi",
+    name: "Burfi (Per Kg)",
+    items: [
+      { id: "besan-burfi", name: "Besan Burfi", desc: "Besan burfi. Priced per kg.", price: 1500, unit: "kg", veg: true, emoji: "🟨" },
+      { id: "moong-dal-burfi", name: "Moong Dal Burfi", desc: "Moong dal burfi. Priced per kg.", price: 1500, unit: "kg", veg: true, emoji: "🟧" },
+      { id: "kalakand", name: "Kalakand", desc: "Milk-based kalakand. Priced per kg.", price: 1800, unit: "kg", veg: true, emoji: "⬜", badge: "POPULAR" },
+      { id: "mango-kalakand", name: "Mango Kalakand", desc: "Kalakand with mango. Priced per kg.", price: 2000, unit: "kg", veg: true, emoji: "🥭", badge: "NEW" }
     ]
   },
   {
@@ -242,23 +176,17 @@ window.MENU = [
       },
       {
         id: "marwadi-sampler",
-        name: "Marwadi Mithai Sampler (1 kg)",
-        desc: "250 g each of Mohanthal, Kaju Katli, Churma Laddoo and Alwar Kalakand.",
+        name: "Marwadi Mithai Sampler",
+        desc: "Besan Laddu (box of 8), Moong Dal Halwa jar (300 g) and Kalakand (250 g).",
         price: 1199, veg: true, emoji: "🎁", badge: "POPULAR",
         options: [GIFTING]
       },
       {
         id: "dussehra-hamper",
-        name: "Festive Dry Fruit & Mithai Hamper",
-        desc: "Kaju Katli 500 g, Pista Barfi 250 g, roasted almonds 200 g and a brass diya in a gift basket.",
-        price: 1999, veg: true, emoji: "🧺", badge: "NEW",
+        name: "Festive Halwa & Laddu Hamper",
+        desc: "Badam Halwa jar, Walnut Halwa jar and a box of 12 Dry Fruit Laddus in a gift basket.",
+        price: 2499, veg: true, emoji: "🧺", badge: "NEW",
         options: [GIFTING]
-      },
-      {
-        id: "ghewar-combo",
-        name: "Ghewar + Rabdi Combo",
-        desc: "One Malai Ghewar with a 250 g tub of rabdi on the side.",
-        price: 699, veg: true, emoji: "🌕", soldOut: true
       }
     ]
   }
